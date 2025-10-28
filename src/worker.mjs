@@ -448,6 +448,15 @@ const adjustProps = (schemaPart) => {
   if (Array.isArray(schemaPart)) {
     schemaPart.forEach(adjustProps);
   } else {
+    if (schemaPart.hasOwnProperty('exclusiveMaximum')) {
+      schemaPart.maximum = schemaPart.exclusiveMaximum;
+      delete schemaPart.exclusiveMaximum;
+    }
+    if (schemaPart.hasOwnProperty('exclusiveMinimum')) {
+      schemaPart.minimum = schemaPart.exclusiveMinimum;
+      delete schemaPart.exclusiveMinimum;
+    }
+
     if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
       delete schemaPart.additionalProperties;
     }
