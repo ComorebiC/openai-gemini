@@ -564,30 +564,33 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
     throw new HttpError("No function calls found in the previous message", 400);
   }
   
-  let jsonString;
+  let stringContent;
   if (Array.isArray(content)) {
-    // Handle OpenAI's structured content format for tool responses
     const textPart = content.find(part => part.type === 'text');
-    jsonString = textPart?.text;
+    stringContent = textPart?.text;
   } else if (typeof content === 'string') {
-    // Handle the simpler string format
-    jsonString = content;
+    stringContent = content;
+  }
+
+  if (typeof stringContent !== 'string') {
+    throw new HttpError("Could not extract a valid string from the tool response content.", 400);
   }
 
   let response;
   try {
-    if (typeof jsonString !== 'string') {
-       throw new Error("Content for tool response is not a valid string.");
-    }
-    response = JSON.parse(jsonString);
+    // First, attempt to parse the string as JSON
+    response = JSON.parse(stringContent);
   } catch (err) {
-    console.error("Error parsing function response content:", err, "Original content:", content);
-    throw new HttpError("Invalid function response, not valid JSON: " + jsonString, 400);
+    // If parsing fails, treat it as a plain string and wrap it in an object.
+    // This makes it compatible with Gemini's structured response requirement.
+    response = { result: stringContent };
   }
 
+  // This check is still useful for cases where the parsed JSON is not an object (e.g., a number, a boolean, or an array).
   if (typeof response !== "object" || response === null || Array.isArray(response)) {
     response = { result: response };
   }
+
   if (!tool_call_id) {
     throw new HttpError("tool_call_id not specified", 400);
   }
