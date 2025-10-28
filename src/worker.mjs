@@ -563,13 +563,28 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
   if (!parts.calls) {
     throw new HttpError("No function calls found in the previous message", 400);
   }
+  
+  let jsonString;
+  if (Array.isArray(content)) {
+    // Handle OpenAI's structured content format for tool responses
+    const textPart = content.find(part => part.type === 'text');
+    jsonString = textPart?.text;
+  } else if (typeof content === 'string') {
+    // Handle the simpler string format
+    jsonString = content;
+  }
+
   let response;
   try {
-    response = JSON.parse(content);
+    if (typeof jsonString !== 'string') {
+       throw new Error("Content for tool response is not a valid string.");
+    }
+    response = JSON.parse(jsonString);
   } catch (err) {
-    console.error("Error parsing function response content:", err);
-    throw new HttpError("Invalid function response: " + content, 400);
+    console.error("Error parsing function response content:", err, "Original content:", content);
+    throw new HttpError("Invalid function response, not valid JSON: " + jsonString, 400);
   }
+
   if (typeof response !== "object" || response === null || Array.isArray(response)) {
     response = { result: response };
   }
@@ -591,6 +606,7 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
     }
   };
 };
+
 const transformFnCalls = ({ tool_calls }) => {
   const calls = {};
   const parts = tool_calls.map(({ function: { arguments: argstr, name }, id, type }, i) => {
