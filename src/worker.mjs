@@ -447,44 +447,52 @@ const adjustProps = (schemaPart) => {
   }
   if (Array.isArray(schemaPart)) {
     schemaPart.forEach(adjustProps);
-  } else {
-    // 转换 const，这是最复杂的
-    if (schemaPart.hasOwnProperty('const')) {
-      const constValue = schemaPart.const;
-      // 规则 1: 如果 const 值为空字符串，Gemini 不接受，所以我们直接移除这个约束
-      if (constValue === "") {
-        delete schemaPart.const;
-      } else {
-        // 规则 2: Gemini 要求 enum 只能用于 STRING 类型。
-        // 所以，如果存在 const，我们必须将 type 强制改为 STRING。
-        schemaPart.type = 'STRING'; 
-        
-        // 然后，将 const 转换为 string 值的 enum
-        schemaPart.enum = [String(constValue)];
-        delete schemaPart.const;
-      }
-    }
+    return;
+  }
 
-    // 转换 exclusiveMaximum 和 exclusiveMinimum
-    if (schemaPart.hasOwnProperty('exclusiveMaximum')) {
-      schemaPart.maximum = schemaPart.exclusiveMaximum;
-      delete schemaPart.exclusiveMaximum;
-    }
-    if (schemaPart.hasOwnProperty('exclusiveMinimum')) {
-      schemaPart.minimum = schemaPart.exclusiveMinimum;
-      delete schemaPart.exclusiveMinimum;
-    }
+  // 处理 OpenAPI 风格的枚举 (anyOf + const)
+  if (Array.isArray(schemaPart.anyOf) && schemaPart.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
+    const enumValues = schemaPart.anyOf.map(item => item.const);
+    const validEnumValues = enumValues.filter(val => val !== "" && val !== null).map(String);
 
-    // 原有逻辑
-    if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
-      delete schemaPart.additionalProperties;
+    if (validEnumValues.length > 0) {
+      schemaPart.type = 'STRING'; // Gemini 的 enum 主要用于字符串
+      schemaPart.enum = validEnumValues;
     }
     
-    // 递归处理
-    Object.values(schemaPart).forEach(adjustProps);
+    delete schemaPart.anyOf;
   }
-};
 
+  // 原有逻辑：处理单个 const
+  if (schemaPart.hasOwnProperty('const')) {
+    const constValue = schemaPart.const;
+    if (constValue === "") {
+      delete schemaPart.const;
+    } else {
+      schemaPart.type = 'STRING'; 
+      schemaPart.enum = [String(constValue)];
+      delete schemaPart.const;
+    }
+  }
+
+  // 原有逻辑：处理 exclusiveMaximum 和 exclusiveMinimum
+  if (schemaPart.hasOwnProperty('exclusiveMaximum')) {
+    schemaPart.maximum = schemaPart.exclusiveMaximum;
+    delete schemaPart.exclusiveMaximum;
+  }
+  if (schemaPart.hasOwnProperty('exclusiveMinimum')) {
+    schemaPart.minimum = schemaPart.exclusiveMinimum;
+    delete schemaPart.exclusiveMinimum;
+  }
+
+  // 原有逻辑
+  if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
+    delete schemaPart.additionalProperties;
+  }
+  
+  // 递归处理所有子属性
+  Object.values(schemaPart).forEach(adjustProps);
+};
 const adjustSchema = (schema) => {
   const obj = schema[schema.type];
   delete obj.strict;
@@ -816,28 +824,6 @@ const transformMessages = async (messages) => {
   return { system_instruction, contents };
 };
 
-
-const transformTools = (req) => {
-  let tools, tool_config;
-  if (req.tools) {
-    const funcs = req.tools.filter(tool => tool.type === "function");
-    funcs.forEach(adjustSchema);
-    tools = [{ function_declarations: funcs.map(schema => schema.function) }];
-  }
-  if (req.tool_choice) {
-    const allowed_function_names = req.tool_choice?.type === "function" ? [ req.tool_choice?.function?.name ] : undefined;
-    if (allowed_function_names || typeof req.tool_choice === "string") {
-      tool_config = {
-        function_calling_config: {
-          mode: allowed_function_names ? "ANY" : req.tool_choice.toUpperCase(),
-          allowed_function_names
-        }
-      };
-    }
-  }
-  return { tools, tool_config };
-};
-
 const reverseTransformValue = (value) => {
   if (typeof value !== 'string') {
     return value; // 如果不是字符串，直接返回
@@ -848,7 +834,6 @@ const reverseTransformValue = (value) => {
   // 检查 null
   if (value === 'null') return null;
   // 检查数字 (整数或浮点数)
-  // 使用一个严格的检查，确保它真的是一个数字的字符串表示形式
   if (value.trim() !== '' && !isNaN(Number(value)) && Number(value).toString() === value) {
     return Number(value);
   }
@@ -878,6 +863,26 @@ const reverseTransformArgs = (args) => {
   return newArgs;
 };
 
+const transformTools = (req) => {
+  let tools, tool_config;
+  if (req.tools) {
+    const funcs = req.tools.filter(tool => tool.type === "function");
+    funcs.forEach(adjustSchema);
+    tools = [{ function_declarations: funcs.map(schema => schema.function) }];
+  }
+  if (req.tool_choice) {
+    const allowed_function_names = req.tool_choice?.type === "function" ? [ req.tool_choice?.function?.name ] : undefined;
+    if (allowed_function_names || typeof req.tool_choice === "string") {
+      tool_config = {
+        function_calling_config: {
+          mode: allowed_function_names ? "ANY" : req.tool_choice.toUpperCase(),
+          allowed_function_names
+        }
+      };
+    }
+  }
+  return { tools, tool_config };
+};
 const transformRequest = async (req, model) => ({
   ...await transformMessages(req.messages),
   safetySettings,
@@ -944,7 +949,6 @@ const transformCandidates = (key, cand) => {
       if (message.content) {
         message.content += sourcesMarkdown;
       } else {
-        // In the rare case there's no text content but there are sources
         message.content = sourcesMarkdown.trim();
       }
     }
