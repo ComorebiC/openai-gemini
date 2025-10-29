@@ -448,6 +448,24 @@ const adjustProps = (schemaPart) => {
   if (Array.isArray(schemaPart)) {
     schemaPart.forEach(adjustProps);
   } else {
+    // 转换 const，这是最复杂的
+    if (schemaPart.hasOwnProperty('const')) {
+      const constValue = schemaPart.const;
+      // 规则 1: 如果 const 值为空字符串，Gemini 不接受，所以我们直接移除这个约束
+      if (constValue === "") {
+        delete schemaPart.const;
+      } else {
+        // 规则 2: Gemini 要求 enum 只能用于 STRING 类型。
+        // 所以，如果存在 const，我们必须将 type 强制改为 STRING。
+        schemaPart.type = 'STRING'; 
+        
+        // 然后，将 const 转换为 string 值的 enum
+        schemaPart.enum = [String(constValue)];
+        delete schemaPart.const;
+      }
+    }
+
+    // 转换 exclusiveMaximum 和 exclusiveMinimum
     if (schemaPart.hasOwnProperty('exclusiveMaximum')) {
       schemaPart.maximum = schemaPart.exclusiveMaximum;
       delete schemaPart.exclusiveMaximum;
@@ -457,12 +475,16 @@ const adjustProps = (schemaPart) => {
       delete schemaPart.exclusiveMinimum;
     }
 
+    // 原有逻辑
     if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
       delete schemaPart.additionalProperties;
     }
+    
+    // 递归处理
     Object.values(schemaPart).forEach(adjustProps);
   }
 };
+
 const adjustSchema = (schema) => {
   const obj = schema[schema.type];
   delete obj.strict;
@@ -815,6 +837,47 @@ const transformTools = (req) => {
   }
   return { tools, tool_config };
 };
+
+const reverseTransformValue = (value) => {
+  if (typeof value !== 'string') {
+    return value; // 如果不是字符串，直接返回
+  }
+  // 检查布尔值
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  // 检查 null
+  if (value === 'null') return null;
+  // 检查数字 (整数或浮点数)
+  // 使用一个严格的检查，确保它真的是一个数字的字符串表示形式
+  if (value.trim() !== '' && !isNaN(Number(value)) && Number(value).toString() === value) {
+    return Number(value);
+  }
+  return value; // 默认返回原始字符串
+};
+
+const reverseTransformArgs = (args) => {
+  if (typeof args !== 'object' || args === null) {
+    return args;
+  }
+
+  if (Array.isArray(args)) {
+    return args.map(item => reverseTransformArgs(item)); // 递归处理数组
+  }
+
+  const newArgs = {};
+  for (const key in args) {
+    if (Object.prototype.hasOwnProperty.call(args, key)) {
+      const value = args[key];
+      if (typeof value === 'object') {
+        newArgs[key] = reverseTransformArgs(value); // 递归处理嵌套对象
+      } else {
+        newArgs[key] = reverseTransformValue(value);
+      }
+    }
+  }
+  return newArgs;
+};
+
 const transformRequest = async (req, model) => ({
   ...await transformMessages(req.messages),
   safetySettings,
@@ -849,7 +912,7 @@ const transformCandidates = (key, cand) => {
         type: "function",
         function: {
           name: fc.name,
-          arguments: JSON.stringify(fc.args),
+          arguments: JSON.stringify(reverseTransformArgs(fc.args)),
         }
       });
     } else if (part.thought === true && part.text) {
