@@ -493,12 +493,55 @@ const adjustProps = (schemaPart) => {
   // 递归处理所有子属性
   Object.values(schemaPart).forEach(adjustProps);
 };
-const adjustSchema = (schema) => {
-  const obj = schema[schema.type];
-  delete obj.strict;
-  delete obj.parameters?.$schema;
-  return adjustProps(schema);
+
+const convertJsonSchemaTypes = (schemaPart) => {
+  if (typeof schemaPart !== "object" || schemaPart === null) {
+    return;
+  }
+
+  if (Array.isArray(schemaPart)) {
+    schemaPart.forEach(convertJsonSchemaTypes);
+    return;
+  }
+
+  // 1. 将类型字符串转换为大写
+  if (schemaPart.type && typeof schemaPart.type === 'string') {
+    const typeMap = {
+      "string": "STRING",
+      "number": "NUMBER",
+      "integer": "INTEGER",
+      "boolean": "BOOLEAN",
+      "array": "ARRAY",
+      "object": "OBJECT",
+    };
+    if (typeMap[schemaPart.type.toLowerCase()]) {
+      schemaPart.type = typeMap[schemaPart.type.toLowerCase()];
+    }
+  }
+  
+  // 2. 移除 Gemini 不支持或可能引起冲突的 'title' 属性
+  if (schemaPart.hasOwnProperty('title')) {
+    delete schemaPart.title;
+  }
+
+  // 3. 递归处理所有子属性
+  Object.values(schemaPart).forEach(convertJsonSchemaTypes);
 };
+
+const adjustSchema = (schema) => {
+  const funcDeclaration = schema.function; // 直接操作函数声明对象
+  
+  // 删除 OpenAI 特有的顶层属性
+  delete funcDeclaration.strict; 
+  delete funcDeclaration.parameters?.$schema;
+
+  // 修复 OpenAPI 和 Gemini 之间的 schema 逻辑差异 (例如 'const')
+  adjustProps(funcDeclaration.parameters);
+  
+  // 递归转换所有类型为大写并进行最终清理
+  convertJsonSchemaTypes(funcDeclaration.parameters);
+};
+
 const harmCategory = [
   "HARM_CATEGORY_HATE_SPEECH",
   "HARM_CATEGORY_SEXUALLY_EXPLICIT",
@@ -864,25 +907,58 @@ const reverseTransformArgs = (args) => {
 };
 
 const transformTools = (req) => {
-  let tools, tool_config;
+  let tools, toolConfig; // 使用 camelCase 变量名以保持一致
+  
   if (req.tools) {
     const funcs = req.tools.filter(tool => tool.type === "function");
+    
+    // 对每个函数声明应用 schema 转换
     funcs.forEach(adjustSchema);
-    tools = [{ function_declarations: funcs.map(schema => schema.function) }];
+    
+    // 使用正确的 Gemini 结构和 camelCase 键名: `functionDeclarations`
+    tools = [{ 
+      functionDeclarations: funcs.map(schema => schema.function) 
+    }];
   }
+  
   if (req.tool_choice) {
-    const allowed_function_names = req.tool_choice?.type === "function" ? [ req.tool_choice?.function?.name ] : undefined;
-    if (allowed_function_names || typeof req.tool_choice === "string") {
-      tool_config = {
-        function_calling_config: {
-          mode: allowed_function_names ? "ANY" : req.tool_choice.toUpperCase(),
-          allowed_function_names
-        }
-      };
+    let mode = "AUTO"; // 默认模式
+    let allowedFunctionNames;
+
+    if (typeof req.tool_choice === "string") {
+      switch (req.tool_choice) {
+        case "auto":
+          mode = "AUTO";
+          break;
+        case "required":
+          // OpenAI的 "required" 意味着模型必须调用一个工具，这最接近Gemini的 "ANY"
+          mode = "ANY";
+          break;
+        case "none":
+          mode = "NONE";
+          break;
+      }
+    } else if (typeof req.tool_choice === "object" && req.tool_choice.type === "function") {
+      // 强制调用特定函数
+      mode = "ANY";
+      allowedFunctionNames = [ req.tool_choice.function.name ];
     }
+    
+    // 使用正确的 camelCase 键名: `functionCallingConfig`, `allowedFunctionNames`
+    toolConfig = {
+      functionCallingConfig: {
+        mode,
+        // 仅当存在时才添加 allowedFunctionNames
+        ...(allowedFunctionNames && { allowedFunctionNames })
+      }
+    };
   }
-  return { tools, tool_config };
+
+  // 返回转换后的对象，注意变量名也是 camelCase
+  return { tools, tool_config: toolConfig }; 
 };
+
+
 const transformRequest = async (req, model) => ({
   ...await transformMessages(req.messages),
   safetySettings,
