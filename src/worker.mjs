@@ -119,23 +119,9 @@ async function handleEmbeddings(req, apiKey) {
     }
     modelFull = modelFull ?? "models/" + model;
 
-    // if (typeof req.model !== "string") {
-    //     throw new HttpError("model is not specified", 400);
-    // }
-    // let model;
-    // if (req.model.startsWith("models/")) {
-    //     model = req.model;
-    // } else {
-    //     if (!req.model.includes("embedding")) {
-    //         req.model = DEFAULT_EMBEDDINGS_MODEL;
-    //     }
-    //     model = "models/" + req.model;
-    // }
-
     if (!Array.isArray(req.input)) {
         req.input = [req.input];
     }
-    // const response = await fetch(`${BASE_URL}/${API_VERSION}/${model}:batchEmbedContents`, {
     const response = await fetch(`${BASE_URL}/${API_VERSION}/${modelFull}:batchEmbedContents`, {
         method: "POST",
         headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
@@ -441,71 +427,29 @@ async function handleCompletions (req, apiKey) {
   return new Response(body, fixCors(response));
 }
 
-const adjustProps = (schemaPart) => {
-  if (typeof schemaPart !== "object" || schemaPart === null) {
-    return;
-  }
-  if (Array.isArray(schemaPart)) {
-    schemaPart.forEach(adjustProps);
-    return;
-  }
+// =================================================================
+// START: REPLACEMENT FOR SCHEMA TRANSFORMATION LOGIC
+// =================================================================
 
-  // 处理 OpenAPI 风格的枚举 (anyOf + const)
-  if (Array.isArray(schemaPart.anyOf) && schemaPart.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
-    const enumValues = schemaPart.anyOf.map(item => item.const);
-    const validEnumValues = enumValues.filter(val => val !== "" && val !== null).map(String);
-
-    if (validEnumValues.length > 0) {
-      schemaPart.type = 'STRING'; // Gemini 的 enum 主要用于字符串
-      schemaPart.enum = validEnumValues;
-    }
-    
-    delete schemaPart.anyOf;
-  }
-
-  // 原有逻辑：处理单个 const
-  if (schemaPart.hasOwnProperty('const')) {
-    const constValue = schemaPart.const;
-    if (constValue === "") {
-      delete schemaPart.const;
-    } else {
-      schemaPart.type = 'STRING'; 
-      schemaPart.enum = [String(constValue)];
-      delete schemaPart.const;
-    }
-  }
-
-  // 原有逻辑：处理 exclusiveMaximum 和 exclusiveMinimum
-  if (schemaPart.hasOwnProperty('exclusiveMaximum')) {
-    schemaPart.maximum = schemaPart.exclusiveMaximum;
-    delete schemaPart.exclusiveMaximum;
-  }
-  if (schemaPart.hasOwnProperty('exclusiveMinimum')) {
-    schemaPart.minimum = schemaPart.exclusiveMinimum;
-    delete schemaPart.exclusiveMinimum;
-  }
-
-  // 原有逻辑
-  if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
-    delete schemaPart.additionalProperties;
-  }
-  
-  // 递归处理所有子属性
-  Object.values(schemaPart).forEach(adjustProps);
-};
-
-const convertJsonSchemaTypes = (schemaPart) => {
-  if (typeof schemaPart !== "object" || schemaPart === null) {
+// NEW: A comprehensive, recursive function to convert OpenAI schema to Gemini schema.
+// This replaces adjustProps, convertJsonSchemaTypes, and the old adjustSchema.
+const transformOpenApiSchemaToGemini = (schemaNode) => {
+  if (typeof schemaNode !== "object" || schemaNode === null) {
     return;
   }
 
-  if (Array.isArray(schemaPart)) {
-    schemaPart.forEach(convertJsonSchemaTypes);
+  if (Array.isArray(schemaNode)) {
+    schemaNode.forEach(transformOpenApiSchemaToGemini);
     return;
   }
 
-  // 1. 将类型字符串转换为大写
-  if (schemaPart.type && typeof schemaPart.type === 'string') {
+  // 1. Fix optional types: Convert type: ["string", "null"] to type: "string"
+  if (Array.isArray(schemaNode.type)) {
+    schemaNode.type = schemaNode.type.find(t => t !== "null");
+  }
+
+  // 2. Convert JSON schema types to Gemini's uppercase format
+  if (schemaNode.type && typeof schemaNode.type === 'string') {
     const typeMap = {
       "string": "STRING",
       "number": "NUMBER",
@@ -514,33 +458,58 @@ const convertJsonSchemaTypes = (schemaPart) => {
       "array": "ARRAY",
       "object": "OBJECT",
     };
-    if (typeMap[schemaPart.type.toLowerCase()]) {
-      schemaPart.type = typeMap[schemaPart.type.toLowerCase()];
+    if (typeMap[schemaNode.type.toLowerCase()]) {
+      schemaNode.type = typeMap[schemaNode.type.toLowerCase()];
     }
   }
+
+  // 3. Handle OpenAPI 3.1 style enums (anyOf + const) and convert them to Gemini enums
+  if (Array.isArray(schemaNode.anyOf)) {
+      if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
+          const enumValues = schemaNode.anyOf
+              .map(item => item.const)
+              .filter(val => val !== "" && val !== null) // Gemini enums can't be empty strings
+              .map(String);
+          
+          if (enumValues.length > 0) {
+              schemaNode.type = 'STRING'; // Gemini enums are string-based
+              schemaNode.enum = enumValues;
+          }
+      }
+      // After processing, delete the incompatible key
+      delete schemaNode.anyOf;
+  }
+    
+  // 4. Delete unsupported OpenAI/JSON Schema keywords
+  delete schemaNode.title;
+  delete schemaNode.$schema;
+  delete schemaNode.$ref; // Critical fix for the second error
+  delete schemaNode.strict;
+  delete schemaNode.exclusiveMaximum;
+  delete schemaNode.exclusiveMinimum;
   
-  // 2. 移除 Gemini 不支持或可能引起冲突的 'title' 属性
-  if (schemaPart.hasOwnProperty('title')) {
-    delete schemaPart.title;
+  // Gemini doesn't support additionalProperties: false, it's the default behavior.
+  // Sending this can cause issues.
+  if (schemaNode.additionalProperties === false) {
+    delete schemaNode.additionalProperties;
   }
 
-  // 3. 递归处理所有子属性
-  Object.values(schemaPart).forEach(convertJsonSchemaTypes);
+  // 5. Recursively process all nested properties
+  Object.values(schemaNode).forEach(transformOpenApiSchemaToGemini);
 };
 
-const adjustSchema = (schema) => {
-  const funcDeclaration = schema.function; // 直接操作函数声明对象
-  
-  // 删除 OpenAI 特有的顶层属性
-  delete funcDeclaration.strict; 
-  delete funcDeclaration.parameters?.$schema;
-
-  // 修复 OpenAPI 和 Gemini 之间的 schema 逻辑差异 (例如 'const')
-  adjustProps(funcDeclaration.parameters);
-  
-  // 递归转换所有类型为大写并进行最终清理
-  convertJsonSchemaTypes(funcDeclaration.parameters);
+// REVISED: The main schema adjustment entry point.
+const adjustSchema = (tool) => {
+  // We operate on the function's parameters object
+  const parameters = tool.function?.parameters;
+  if (parameters) {
+    transformOpenApiSchemaToGemini(parameters);
+  }
 };
+
+// =================================================================
+// END: REPLACEMENT FOR SCHEMA TRANSFORMATION LOGIC
+// =================================================================
 
 const harmCategory = [
   "HARM_CATEGORY_HATE_SPEECH",
@@ -1053,22 +1022,7 @@ const notEmpty = (el) => Object.values(el).some(Boolean) ? el : undefined;
 const sum = (...numbers) => numbers.reduce((total, num) => total + (num ?? 0), 0);
 const transformUsage = (data) => ({
   completion_tokens: sum(data.candidatesTokenCount, data.toolUsePromptTokenCount, data.thoughtsTokenCount),
-  completion_tokens: sum(data.candidatesTokenCount, data.toolUsePromptTokenCount, data.thoughtsTokenCount),
   prompt_tokens: data.promptTokenCount,
-  total_tokens: data.totalTokenCount,
-  completion_tokens_details: notEmpty({
-    audio_tokens: data.candidatesTokensDetails
-      ?.find(el => el.modality === "AUDIO")
-      ?.tokenCount,
-    reasoning_tokens: data.thoughtsTokenCount,
-  }),
-  prompt_tokens_details: notEmpty({
-    audio_tokens: data.promptTokensDetails
-      ?.find(el => el.modality === "AUDIO")
-      ?.tokenCount,
-    cached_tokens: data.cacheTokensDetails
-      ?.reduce((acc,el) => acc + el.tokenCount, 0),
-  }),
   total_tokens: data.totalTokenCount,
   completion_tokens_details: notEmpty({
     audio_tokens: data.candidatesTokensDetails
