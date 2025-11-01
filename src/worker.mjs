@@ -427,12 +427,7 @@ async function handleCompletions (req, apiKey) {
   return new Response(body, fixCors(response));
 }
 
-// =================================================================
-// START: REPLACEMENT FOR SCHEMA TRANSFORMATION LOGIC
-// =================================================================
 
-// NEW: A comprehensive, recursive function to convert OpenAI schema to Gemini schema.
-// This replaces adjustProps, convertJsonSchemaTypes, and the old adjustSchema.
 const transformOpenApiSchemaToGemini = (schemaNode) => {
   if (typeof schemaNode !== "object" || schemaNode === null) {
     return;
@@ -483,22 +478,20 @@ const transformOpenApiSchemaToGemini = (schemaNode) => {
   // 4. Delete unsupported OpenAI/JSON Schema keywords
   delete schemaNode.title;
   delete schemaNode.$schema;
-  delete schemaNode.$ref; // Critical fix for the second error
+  delete schemaNode.$ref; // Critical fix for potential future errors
   delete schemaNode.strict;
   delete schemaNode.exclusiveMaximum;
   delete schemaNode.exclusiveMinimum;
   
-  // Gemini doesn't support additionalProperties: false, it's the default behavior.
-  // Sending this can cause issues.
-  if (schemaNode.additionalProperties === false) {
-    delete schemaNode.additionalProperties;
-  }
+  // Gemini doesn't support additionalProperties. It's the default behavior.
+  // Sending this, even as `false`, causes the error you observed.
+  delete schemaNode.additionalProperties;
+
 
   // 5. Recursively process all nested properties
   Object.values(schemaNode).forEach(transformOpenApiSchemaToGemini);
 };
 
-// REVISED: The main schema adjustment entry point.
 const adjustSchema = (tool) => {
   // We operate on the function's parameters object
   const parameters = tool.function?.parameters;
@@ -506,10 +499,6 @@ const adjustSchema = (tool) => {
     transformOpenApiSchemaToGemini(parameters);
   }
 };
-
-// =================================================================
-// END: REPLACEMENT FOR SCHEMA TRANSFORMATION LOGIC
-// =================================================================
 
 const harmCategory = [
   "HARM_CATEGORY_HATE_SPEECH",
