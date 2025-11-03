@@ -438,62 +438,61 @@ const transformOpenApiSchemaToGemini = (schemaNode) => {
     return;
   }
 
-  // 1. Fix optional types: Convert type: ["string", "null"] to type: "string"
-  if (Array.isArray(schemaNode.type)) {
-    schemaNode.type = schemaNode.type.find(t => t !== "null");
-  }
-
-  // 2. Convert JSON schema types to Gemini's uppercase format
-  if (schemaNode.type && typeof schemaNode.type === 'string') {
+  if (schemaNode.type) {
     const typeMap = {
-      "string": "STRING",
-      "number": "NUMBER",
-      "integer": "INTEGER",
-      "boolean": "BOOLEAN",
-      "array": "ARRAY",
-      "object": "OBJECT",
+      "string": "STRING", "number": "NUMBER", "integer": "INTEGER",
+      "boolean": "BOOLEAN", "array": "ARRAY", "object": "OBJECT",
     };
-    if (typeMap[schemaNode.type.toLowerCase()]) {
-      schemaNode.type = typeMap[schemaNode.type.toLowerCase()];
+    const primaryType = Array.isArray(schemaNode.type)
+      ? schemaNode.type.find(t => t !== "null")
+      : schemaNode.type;
+    
+    if (primaryType && typeMap[primaryType.toLowerCase()]) {
+      schemaNode.type = typeMap[primaryType.toLowerCase()];
+    } else {
+      delete schemaNode.type;
     }
   }
 
-  // 3. Handle OpenAPI 3.1 style enums (anyOf + const) and convert them to Gemini enums
+  if (schemaNode.type === 'ARRAY' && !schemaNode.items) {
+    schemaNode.items = { type: 'OBJECT' };
+  }
+
   if (Array.isArray(schemaNode.anyOf)) {
-      if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
-          const enumValues = schemaNode.anyOf
-              .map(item => item.const)
-              .filter(val => val !== "" && val !== null) // Gemini enums can't be empty strings
-              .map(String);
-          
-          if (enumValues.length > 0) {
-              schemaNode.type = 'STRING'; // Gemini enums are string-based
-              schemaNode.enum = enumValues;
-          }
-      }
-      // After processing, delete the incompatible key
-      delete schemaNode.anyOf;
+    if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
+        const enumValues = schemaNode.anyOf
+            .map(item => item.const)
+            .filter(val => val !== "" && val !== null)
+            .map(String); 
+        if (enumValues.length > 0) {
+            schemaNode.type = 'STRING';
+            schemaNode.enum = enumValues;
+        }
+    } else if (!schemaNode.type) {
+        const firstValidType = schemaNode.anyOf.find(item => item && item.type);
+        if (firstValidType) {
+            Object.assign(schemaNode, firstValidType);
+            transformOpenApiSchemaToGemini(schemaNode); 
+        }
+    }
+    delete schemaNode.anyOf;
   }
     
-  // 4. Delete unsupported OpenAI/JSON Schema keywords
-  delete schemaNode.title;
-  delete schemaNode.$schema;
-  delete schemaNode.$ref; // Critical fix for potential future errors
-  delete schemaNode.strict;
-  delete schemaNode.exclusiveMaximum;
-  delete schemaNode.exclusiveMinimum;
+  const unsupportedKeys = [
+    'title', '$schema', '$ref', 'strict', 'exclusiveMaximum', 
+    'exclusiveMinimum', 'additionalProperties', 'oneOf', 'allOf', 'default'
+  ];
+  unsupportedKeys.forEach(key => delete schemaNode[key]);
   
-  // Gemini doesn't support additionalProperties. It's the default behavior.
-  // Sending this, even as `false`, causes the error you observed.
-  delete schemaNode.additionalProperties;
-
-
-  // 5. Recursively process all nested properties
-  Object.values(schemaNode).forEach(transformOpenApiSchemaToGemini);
+  if (schemaNode.properties) {
+    Object.values(schemaNode.properties).forEach(transformOpenApiSchemaToGemini);
+  }
+  if (schemaNode.items) {
+    transformOpenApiSchemaToGemini(schemaNode.items);
+  }
 };
 
 const adjustSchema = (tool) => {
-  // We operate on the function's parameters object
   const parameters = tool.function?.parameters;
   if (parameters) {
     transformOpenApiSchemaToGemini(parameters);
