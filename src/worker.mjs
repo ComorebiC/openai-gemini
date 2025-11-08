@@ -428,13 +428,38 @@ async function handleCompletions (req, apiKey) {
 }
 
 
-const transformOpenApiSchemaToGemini = (schemaNode) => {
+const resolveRef = (ref, rootSchema) => {
+  if (!ref.startsWith('#/')) {
+    // We only support local refs for now
+    return null;
+  }
+  const path = ref.substring(2).split('/');
+  let current = rootSchema;
+  for (const segment of path) {
+    if (current && typeof current === 'object' && segment in current) {
+      current = current[segment];
+    } else {
+      return null;
+    }
+  }
+  return current;
+};
+
+const transformOpenApiSchemaToGemini = (schemaNode, rootSchema) => {
   if (typeof schemaNode !== "object" || schemaNode === null) {
     return;
   }
+  
+  if (schemaNode.$ref) {
+    const resolved = resolveRef(schemaNode.$ref, rootSchema);
+    if (resolved) {
+      delete schemaNode.$ref;
+      Object.assign(schemaNode, { ...resolved, ...schemaNode });
+    }
+  }
 
   if (Array.isArray(schemaNode)) {
-    schemaNode.forEach(transformOpenApiSchemaToGemini);
+    schemaNode.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema));
     return;
   }
 
@@ -459,6 +484,9 @@ const transformOpenApiSchemaToGemini = (schemaNode) => {
   }
 
   if (Array.isArray(schemaNode.anyOf)) {
+    // First, recursively transform all items within anyOf
+    schemaNode.anyOf.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema));
+    
     if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
         const enumValues = schemaNode.anyOf
             .map(item => item.const)
@@ -469,10 +497,12 @@ const transformOpenApiSchemaToGemini = (schemaNode) => {
             schemaNode.enum = enumValues;
         }
     } else if (!schemaNode.type) {
-        const firstValidType = schemaNode.anyOf.find(item => item && item.type);
-        if (firstValidType) {
-            Object.assign(schemaNode, firstValidType);
-            transformOpenApiSchemaToGemini(schemaNode); 
+        // Find the first valid item (now that refs are resolved) and merge its properties
+        const firstValidItem = schemaNode.anyOf.find(item => item && (item.type || item.enum));
+        if (firstValidItem) {
+            Object.assign(schemaNode, firstValidItem);
+            // After merging, we don't need to recursively call on self, 
+            // as the properties will be handled by the logic below.
         }
     }
     delete schemaNode.anyOf;
@@ -480,22 +510,23 @@ const transformOpenApiSchemaToGemini = (schemaNode) => {
     
   const unsupportedKeys = [
     'title', '$schema', '$ref', 'strict', 'exclusiveMaximum', 
-    'exclusiveMinimum', 'additionalProperties', 'oneOf', 'allOf', 'default'
+    'exclusiveMinimum', 'additionalProperties', 'oneOf', 'allOf', 'default',
+    '$defs' // Also remove $defs after processing
   ];
   unsupportedKeys.forEach(key => delete schemaNode[key]);
   
   if (schemaNode.properties) {
-    Object.values(schemaNode.properties).forEach(transformOpenApiSchemaToGemini);
+    Object.values(schemaNode.properties).forEach(prop => transformOpenApiSchemaToGemini(prop, rootSchema));
   }
   if (schemaNode.items) {
-    transformOpenApiSchemaToGemini(schemaNode.items);
+    transformOpenApiSchemaToGemini(schemaNode.items, rootSchema);
   }
 };
 
 const adjustSchema = (tool) => {
   const parameters = tool.function?.parameters;
   if (parameters) {
-    transformOpenApiSchemaToGemini(parameters);
+    transformOpenApiSchemaToGemini(parameters, parameters);
   }
 };
 
