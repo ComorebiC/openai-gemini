@@ -445,11 +445,14 @@ const resolveRef = (ref, rootSchema) => {
   return current;
 };
 
-const transformOpenApiSchemaToGemini = (schemaNode, rootSchema) => {
-  if (typeof schemaNode !== "object" || schemaNode === null) {
+const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Set()) => {
+  // 1. 如果不是对象、为null，或者已经访问过（检测到循环），则立即返回
+  if (typeof schemaNode !== "object" || schemaNode === null || visited.has(schemaNode)) {
     return;
   }
-  
+  // 2. 将当前节点标记为已访问
+  visited.add(schemaNode);
+
   if (schemaNode.$ref) {
     const resolved = resolveRef(schemaNode.$ref, rootSchema);
     if (resolved) {
@@ -459,7 +462,8 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema) => {
   }
 
   if (Array.isArray(schemaNode)) {
-    schemaNode.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema));
+    // 3. 在递归调用中传递 visited 集合
+    schemaNode.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
     return;
   }
 
@@ -484,8 +488,8 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema) => {
   }
 
   if (Array.isArray(schemaNode.anyOf)) {
-    // First, recursively transform all items within anyOf
-    schemaNode.anyOf.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema));
+    // 3. 在递归调用中传递 visited 集合
+    schemaNode.anyOf.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
     
     if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
         const enumValues = schemaNode.anyOf
@@ -497,12 +501,9 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema) => {
             schemaNode.enum = enumValues;
         }
     } else if (!schemaNode.type) {
-        // Find the first valid item (now that refs are resolved) and merge its properties
         const firstValidItem = schemaNode.anyOf.find(item => item && (item.type || item.enum));
         if (firstValidItem) {
             Object.assign(schemaNode, firstValidItem);
-            // After merging, we don't need to recursively call on self, 
-            // as the properties will be handled by the logic below.
         }
     }
     delete schemaNode.anyOf;
@@ -511,15 +512,17 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema) => {
   const unsupportedKeys = [
     'title', '$schema', '$ref', 'strict', 'exclusiveMaximum', 
     'exclusiveMinimum', 'additionalProperties', 'oneOf', 'allOf', 'default',
-    '$defs' // Also remove $defs after processing
+    '$defs'
   ];
   unsupportedKeys.forEach(key => delete schemaNode[key]);
   
   if (schemaNode.properties) {
-    Object.values(schemaNode.properties).forEach(prop => transformOpenApiSchemaToGemini(prop, rootSchema));
+    // 3. 在递归调用中传递 visited 集合
+    Object.values(schemaNode.properties).forEach(prop => transformOpenApiSchemaToGemini(prop, rootSchema, visited));
   }
   if (schemaNode.items) {
-    transformOpenApiSchemaToGemini(schemaNode.items, rootSchema);
+    // 3. 在递归调用中传递 visited 集合
+    transformOpenApiSchemaToGemini(schemaNode.items, rootSchema, visited);
   }
 };
 
