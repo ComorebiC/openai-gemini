@@ -1,3 +1,6 @@
+# Gemini-OpenAI 2
+[English](https://github.com/Komorebi-yaodong/openai-gemini) | [简体中文](https://github.com/Komorebi-yaodong/openai-gemini/blob/main/README_zh.md) | [original repo](https://github.com/PublicAffairs/openai-gemini)
+
 ## Why
 
 The Gemini API is [free](https://ai.google.dev/pricing "limits applied!"),
@@ -34,7 +37,7 @@ which is necessary for continuous integration (CI).
 
 ### Deploy with Vercel
 
- [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/PublicAffairs/openai-gemini&repository-name=my-openai-gemini)
+ [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/Komorebi-yaodong/openai-gemini&repository-name=my-openai-gemini)
 - Alternatively can be deployed with [cli](https://vercel.com/docs/cli):
   `vercel deploy`
 - Serve locally: `vercel dev`
@@ -43,7 +46,7 @@ which is necessary for continuous integration (CI).
 
 ### Deploy to Netlify
 
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/PublicAffairs/openai-gemini&integrationName=integrationName&integrationSlug=integrationSlug&integrationDescription=integrationDescription)
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/Komorebi-yaodong/openai-gemini&integrationName=integrationName&integrationSlug=integrationSlug&integrationDescription=integrationDescription)
 - Alternatively can be deployed with [cli](https://docs.netlify.com/cli/get-started/):
   `netlify deploy`
 - Serve locally: `netlify dev`
@@ -56,8 +59,8 @@ which is necessary for continuous integration (CI).
 
 ### Deploy to Cloudflare
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/PublicAffairs/openai-gemini)
-- Alternatively can be deployed manually pasting content of [`src/worker.mjs`](src/worker.mjs)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Komorebi-yaodong/openai-gemini)
+- Alternatively can be deployed manually pasting content of the source mjs file
   to https://workers.cloudflare.com/playground (see there `Deploy` button).
 - Alternatively can be deployed with [cli](https://developers.cloudflare.com/workers/wrangler/):
   `wrangler deploy`
@@ -131,17 +134,25 @@ This proxy supports the `reasoning_effort` parameter to control the Gemini model
 ## Built-in tools
 
 ### Web Search
-To use the **web search** tool, append ":search" to the model name
-(e.g., "gemini-2.5-flash:search").
+To use the **web search** tool, append `:search` to the model name
+(e.g., `gemini-2.5-flash:search`).
 
-Note: The `annotations` message property is not implemented.
+### URL Context
+To provide a URL for context, append `:url` to the model name (e.g., `gemini-2.5-flash:url`). The URL should be included in the user's message.
+
+### Code Execution
+To enable the **code execution** tool, append `:execode` to the model name (e.g., `gemini-2.5-flash:execode`).
 
 ### Image Generation
-To use the **image generation** tool, specify a model name that includes `image-generation`. The response will be delivered within the `chat/completions` message content as a markdown image string, like this: `![gemini-image-generation](data:image/png;base64,...)`.
+To use the **image generation** tool, specify a model name that includes `-image`. The response will be delivered within the `chat/completions` message content as a markdown image string, like this: `![gemini-image-generation](data:image/png;base64,...)`.
 
 ## Text-to-Speech (TTS)
 
-The proxy supports text-to-speech generation via the `/v1/audio/speech` endpoint, mapping to Gemini's audio generation capabilities.
+The proxy supports two methods for text-to-speech generation, mapping to Gemini's audio capabilities.
+
+### Method 1: Standard `/v1/audio/speech` Endpoint
+
+This is the standard OpenAI-compatible method.
 
 - **Endpoint**: `/v1/audio/speech`
 - **Method**: `POST`
@@ -150,10 +161,20 @@ The proxy supports text-to-speech generation via the `/v1/audio/speech` endpoint
     - Natively supports `wav` (with header) and `pcm` (raw audio data).
     - Requesting other formats like `mp3`, `opus`, `aac`, or `flac` will result in a **fallback to the `wav` format**. In such cases, the response will include an `X-Warning` header indicating the fallback.
 
-## Media
+### Method 2: Via `/v1/chat/completions` Endpoint
 
-[Vision] and [audio] input supported as per OpenAI [specs].
-Implemented via [`inlineData`](https://ai.google.dev/api/caching#Part).
+This proxy also supports a non-standard method for TTS by including a `modalities` field in the chat completion request. The audio data is returned within the standard chat completion response structure.
+
+- **Endpoint**: `/v1/chat/completions`
+- **Trigger**: Include `"modalities": ["audio"]` in your request body.
+- **Input**: The text from the last message in the `messages` array will be used as input.
+- **Voice**: Specify the voice using `audio.voice` in the request body (e.g., `{"audio": {"voice": "Zephyr"}}`).
+- **Response**: The response will be a standard `chat.completion` object where the assistant's message contains an `audio` object with the base64-encoded data.
+
+## Media (Vision and Audio Input)
+
+[Vision] and [audio] input are supported as per OpenAI [specs].
+This is implemented via Gemini's [`inlineData`](https://ai.google.dev/api/caching#Part).
 
 [vision]: https://platform.openai.com/docs/guides/images-vision?api-mode=chat&format=url#giving-a-model-images-as-input
 [audio]: https://platform.openai.com/docs/guides/audio?example=audio-in&lang=curl#add-audio-to-your-existing-application
@@ -162,11 +183,13 @@ Implemented via [`inlineData`](https://ai.google.dev/api/caching#Part).
 
 ## Gemini-specific functions
 
-There are several features supported by Gemini that are not available in OpenAI models
-but can be enabled using the `extra_body` field.
-The most notable of these is [`thinking_config`](https://ai.google.dev/gemini-api/docs/openai#thinking).
+There are several features supported by Gemini that are not available in OpenAI models but can be enabled using the `extra_body.google` field.
 
-For more details, refer to the [Gemini API docs](https://ai.google.dev/gemini-api/docs/openai#extra-body).
+- **`safety_settings`**: Override the default safety settings.
+- **`cached_content`**: Use a cached context to speed up responses.
+- **`thinking_config`**: Control the model's internal reasoning process.
+
+For more details on how to use these, refer to the [Gemini API docs](https://ai.google.dev/gemini-api/docs/openai#extra-body).
 
 ---
 
@@ -204,11 +227,11 @@ For more details, refer to the [Gemini API docs](https://ai.google.dev/gemini-ap
   - [x] `stream`
   - [x] `stream_options`
       - [x] `include_usage`
-  - [x] `temperature` (0.0..2.0 for OpenAI, but Gemini supports up to infinity)
+  - [x] `temperature` (0.0..2.0 for OpenAI, but Gemini supports a wider range)
   - [x] `top_p`
   - [x] `tools`
   - [x] `tool_choice`
-  - [ ] `parallel_tool_calls` (is always active in Gemini)
+  - [ ] `parallel_tool_calls` (is always active by default in Gemini)
   - [x] [`extra_body`](#gemini-specific-functions)
 
   </details>
