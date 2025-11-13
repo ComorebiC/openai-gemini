@@ -446,23 +446,20 @@ const resolveRef = (ref, rootSchema) => {
 };
 
 const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Set()) => {
-  // 1. 如果不是对象、为null，或者已经访问过（检测到循环），则立即返回
   if (typeof schemaNode !== "object" || schemaNode === null || visited.has(schemaNode)) {
     return;
   }
-  // 2. 将当前节点标记为已访问
   visited.add(schemaNode);
 
   if (schemaNode.$ref) {
     const resolved = resolveRef(schemaNode.$ref, rootSchema);
     if (resolved) {
       delete schemaNode.$ref;
-      Object.assign(schemaNode, { ...resolved, ...schemaNode });
+      Object.assign(schemaNode, { ...JSON.parse(JSON.stringify(resolved)), ...schemaNode });
     }
   }
 
   if (Array.isArray(schemaNode)) {
-    // 3. 在递归调用中传递 visited 集合
     schemaNode.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
     return;
   }
@@ -488,7 +485,6 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
   }
 
   if (Array.isArray(schemaNode.anyOf)) {
-    // 3. 在递归调用中传递 visited 集合
     schemaNode.anyOf.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
     
     if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
@@ -517,11 +513,9 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
   unsupportedKeys.forEach(key => delete schemaNode[key]);
   
   if (schemaNode.properties) {
-    // 3. 在递归调用中传递 visited 集合
     Object.values(schemaNode.properties).forEach(prop => transformOpenApiSchemaToGemini(prop, rootSchema, visited));
   }
   if (schemaNode.items) {
-    // 3. 在递归调用中传递 visited 集合
     transformOpenApiSchemaToGemini(schemaNode.items, rootSchema, visited);
   }
 };
