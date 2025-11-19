@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
 export default {
-  async fetch (request) {
+  async fetch(request) {
     if (request.method === "OPTIONS") {
       return handleOPTIONS();
     }
@@ -26,7 +26,7 @@ export default {
         case pathname.endsWith("/audio/speech"):
           assert(request.method === "POST");
           return handleSpeech(await request.json(), apiKey)
-              .catch(errHandler);
+            .catch(errHandler);
         case pathname.endsWith("/embeddings"):
           assert(request.method === "POST");
           return handleEmbeddings(await request.json(), apiKey)
@@ -83,28 +83,28 @@ const makeHeaders = (apiKey, more) => ({
 });
 
 async function handleModels(apiKey) {
-    const response = await fetch(`${BASE_URL}/${API_VERSION}/models`, {
-        headers: makeHeaders(apiKey),
-    });
-    let { body } = response;
-    if (response.ok) {
-        const { models } = JSON.parse(await response.text());
-        body = JSON.stringify({
-            object: "list",
-            data: models.map(({ name }) => ({
-                id: name.replace("models/", ""),
-                object: "model",
-                created: 0,
-                owned_by: "",
-            })),
-        }, null, "  ");
-    }
-    return new Response(body, fixCors(response));
+  const response = await fetch(`${BASE_URL}/${API_VERSION}/models`, {
+    headers: makeHeaders(apiKey),
+  });
+  let { body } = response;
+  if (response.ok) {
+    const { models } = JSON.parse(await response.text());
+    body = JSON.stringify({
+      object: "list",
+      data: models.map(({ name }) => ({
+        id: name.replace("models/", ""),
+        object: "model",
+        created: 0,
+        owned_by: "",
+      })),
+    }, null, "  ");
+  }
+  return new Response(body, fixCors(response));
 }
 const DEFAULT_EMBEDDINGS_MODEL = "gemini-embedding-001";
 async function handleEmbeddings(req, apiKey) {
-    let modelFull, model;
-    switch (true) {
+  let modelFull, model;
+  switch (true) {
     case typeof req.model !== "string":
       throw new HttpError("model is not specified", 400);
     case req.model.startsWith("models/"):
@@ -116,213 +116,213 @@ async function handleEmbeddings(req, apiKey) {
       break;
     default:
       model = DEFAULT_EMBEDDINGS_MODEL;
-    }
-    modelFull = modelFull ?? "models/" + model;
+  }
+  modelFull = modelFull ?? "models/" + model;
 
-    if (!Array.isArray(req.input)) {
-        req.input = [req.input];
-    }
-    const response = await fetch(`${BASE_URL}/${API_VERSION}/${modelFull}:batchEmbedContents`, {
-        method: "POST",
-        headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-        body: JSON.stringify({
-            "requests": req.input.map(text => ({
-                model: modelFull,
-                content: { parts: { text } },
-                outputDimensionality: req.dimensions,
-            }))
-        })
-    });
-    let { body } = response;
-    if (response.ok) {
-        const { embeddings } = JSON.parse(await response.text());
-        body = JSON.stringify({
-            object: "list",
-            data: embeddings.map(({ values }, index) => ({
-                object: "embedding",
-                index,
-                embedding: values,
-            })),
-            model,
-        }, null, "  ");
-    }
-    return new Response(body, fixCors(response));
+  if (!Array.isArray(req.input)) {
+    req.input = [req.input];
+  }
+  const response = await fetch(`${BASE_URL}/${API_VERSION}/${modelFull}:batchEmbedContents`, {
+    method: "POST",
+    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify({
+      "requests": req.input.map(text => ({
+        model: modelFull,
+        content: { parts: { text } },
+        outputDimensionality: req.dimensions,
+      }))
+    })
+  });
+  let { body } = response;
+  if (response.ok) {
+    const { embeddings } = JSON.parse(await response.text());
+    body = JSON.stringify({
+      object: "list",
+      data: embeddings.map(({ values }, index) => ({
+        object: "embedding",
+        index,
+        embedding: values,
+      })),
+      model,
+    }, null, "  ");
+  }
+  return new Response(body, fixCors(response));
 }
 function addWavHeader(pcmData) {
-    const sampleRate = 24000;
-    const numChannels = 1;
-    const bitsPerSample = 16;
-    const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-    const blockAlign = numChannels * (bitsPerSample / 8);
-    const dataSize = pcmData.length;
-    const chunkSize = 36 + dataSize;
-    const header = Buffer.alloc(44);
-    header.write('RIFF', 0);
-    header.writeUInt32LE(chunkSize, 4);
-    header.write('WAVE', 8);
-    header.write('fmt ', 12);
-    header.writeUInt32LE(16, 16);
-    header.writeUInt16LE(1, 20);
-    header.writeUInt16LE(numChannels, 22);
-    header.writeUInt32LE(sampleRate, 24);
-    header.writeUInt32LE(byteRate, 28);
-    header.writeUInt16LE(blockAlign, 32);
-    header.writeUInt16LE(bitsPerSample, 34);
-    header.write('data', 36);
-    header.writeUInt32LE(dataSize, 40);
-    return Buffer.concat([header, pcmData]);
+  const sampleRate = 24000;
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = pcmData.length;
+  const chunkSize = 36 + dataSize;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(chunkSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(byteRate, 28);
+  header.writeUInt16LE(blockAlign, 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+  return Buffer.concat([header, pcmData]);
 }
 async function handleTts(req, apiKey) {
-    if (!req.messages || req.messages.length === 0) {
-        throw new HttpError("`messages` array is required for TTS.", 400);
-    }
-    if (!req.audio?.voice) {
-        throw new HttpError("`audio.voice` is required for TTS.", 400);
-    }
-    const lastMessage = req.messages[req.messages.length - 1];
-    const parts = await transformMsg(lastMessage);
-    const inputText = parts.map(p => p.text).join(' ');
-    if (!inputText) {
-        throw new HttpError("A non-empty text message is required for TTS.", 400);
-    }
-    const geminiTtsModel = req.model || "gemini-2.5-flash-preview-tts";
-    const geminiPayload = {
-        model: geminiTtsModel,
-        contents: [{
-            parts: [{ text: inputText }]
-        }],
-        generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-                voiceConfig: {
-                    prebuiltVoiceConfig: {
-                        voiceName: req.audio.voice
-                    }
-                }
-            }
-        },
-    };
-    const url = `${BASE_URL}/${API_VERSION}/models/${geminiTtsModel}:generateContent`;
-    const response = await fetch(url, {
-        method: "POST",
-        headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-        body: JSON.stringify(geminiPayload),
-    });
-    if (!response.ok) {
-        const errorBody = await response.text();
-        console.error("Gemini TTS API Error:", errorBody);
-        return new Response(errorBody, fixCors(response));
-    }
-    const geminiResponse = await response.json();
-    const audioDataBase64 = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioDataBase64) {
-        console.error("Could not extract audio data from Gemini response:", JSON.stringify(geminiResponse));
-        throw new HttpError("Failed to generate audio, invalid response from upstream.", 500);
-    }
-    const requestedFormat = req.audio.format || 'wav';
-    let finalAudioDataB64 = audioDataBase64;
-    let finalFormat = 'pcm_s16le_24000_mono';
-    if (requestedFormat.toLowerCase() === 'wav') {
-        const pcmData = Buffer.from(audioDataBase64, 'base64');
-        const wavData = addWavHeader(pcmData);
-        finalAudioDataB64 = wavData.toString('base64');
-        finalFormat = 'wav';
-    }
-    const openAiResponse = {
-        id: "chatcmpl-tts-" + generateId(),
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: req.model,
-        choices: [{
-            index: 0,
-            message: {
-                role: "assistant",
-                audio: {
-                    format: finalFormat,
-                    data: finalAudioDataB64,
-                    transcript: inputText,
-                }
-            },
-            finish_reason: "stop",
-        }],
-        usage: null,
-    };
-    return new Response(JSON.stringify(openAiResponse, null, 2), fixCors({ headers: response.headers }));
+  if (!req.messages || req.messages.length === 0) {
+    throw new HttpError("`messages` array is required for TTS.", 400);
+  }
+  if (!req.audio?.voice) {
+    throw new HttpError("`audio.voice` is required for TTS.", 400);
+  }
+  const lastMessage = req.messages[req.messages.length - 1];
+  const parts = await transformMsg(lastMessage);
+  const inputText = parts.map(p => p.text).join(' ');
+  if (!inputText) {
+    throw new HttpError("A non-empty text message is required for TTS.", 400);
+  }
+  const geminiTtsModel = req.model || "gemini-2.5-flash-preview-tts";
+  const geminiPayload = {
+    model: geminiTtsModel,
+    contents: [{
+      parts: [{ text: inputText }]
+    }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: req.audio.voice
+          }
+        }
+      }
+    },
+  };
+  const url = `${BASE_URL}/${API_VERSION}/models/${geminiTtsModel}:generateContent`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify(geminiPayload),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text();
+    console.error("Gemini TTS API Error:", errorBody);
+    return new Response(errorBody, fixCors(response));
+  }
+  const geminiResponse = await response.json();
+  const audioDataBase64 = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!audioDataBase64) {
+    console.error("Could not extract audio data from Gemini response:", JSON.stringify(geminiResponse));
+    throw new HttpError("Failed to generate audio, invalid response from upstream.", 500);
+  }
+  const requestedFormat = req.audio.format || 'wav';
+  let finalAudioDataB64 = audioDataBase64;
+  let finalFormat = 'pcm_s16le_24000_mono';
+  if (requestedFormat.toLowerCase() === 'wav') {
+    const pcmData = Buffer.from(audioDataBase64, 'base64');
+    const wavData = addWavHeader(pcmData);
+    finalAudioDataB64 = wavData.toString('base64');
+    finalFormat = 'wav';
+  }
+  const openAiResponse = {
+    id: "chatcmpl-tts-" + generateId(),
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: req.model,
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        audio: {
+          format: finalFormat,
+          data: finalAudioDataB64,
+          transcript: inputText,
+        }
+      },
+      finish_reason: "stop",
+    }],
+    usage: null,
+  };
+  return new Response(JSON.stringify(openAiResponse, null, 2), fixCors({ headers: response.headers }));
 }
 async function handleSpeech(req, apiKey) {
-    if (!req.input) {
-        throw new HttpError("`input` field is required.", 400);
-    }
-    if (!req.voice) {
-        throw new HttpError("`voice` field is required.", 400);
-    }
-    const geminiTtsModel = req.model || "gemini-2.5-flash-preview-tts";
-    const geminiPayload = {
-        model: geminiTtsModel,
-        contents: [{
-            parts: [{ text: req.input }]
-        }],
-        generationConfig: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-                voiceConfig: {
-                    prebuiltVoiceConfig: {
-                        voiceName: req.voice
-                    }
-                }
-            }
-        },
-    };
-    const url = `${BASE_URL}/${API_VERSION}/models/${geminiTtsModel}:generateContent`;
-    const geminiApiResponse = await fetch(url, {
-        method: "POST",
-        headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-        body: JSON.stringify(geminiPayload),
-    });
-    if (!geminiApiResponse.ok) {
-        const errorBody = await geminiApiResponse.text();
-        console.error("Gemini TTS API Error:", errorBody);
-        return new Response(errorBody, fixCors({ headers: geminiApiResponse.headers, status: geminiApiResponse.status, statusText: geminiApiResponse.statusText }));
-    }
-    const geminiResponseJson = await geminiApiResponse.json();
-    const audioDataBase64 = geminiResponseJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioDataBase64) {
-        throw new HttpError("Failed to extract audio data from Gemini response.", 500);
-    }
-    const pcmData = Buffer.from(audioDataBase64, 'base64');
-    const responseFormat = req.response_format || 'wav';
-    let audioData;
-    let contentType;
-    const corsHeaders = fixCors({}).headers;
-    switch (responseFormat.toLowerCase()) {
-        case 'wav':
-            audioData = addWavHeader(pcmData);
-            contentType = 'audio/wav';
-            break;
-        case 'pcm':
-            audioData = pcmData;
-            contentType = 'audio/L16; rate=24000; channels=1';
-            break;
-        case 'mp3':
-        case 'opus':
-        case 'aac':
-        case 'flac':
-        default:
-            audioData = addWavHeader(pcmData);
-            contentType = 'audio/wav';
-            corsHeaders.set('X-Warning', `Unsupported format "${responseFormat}" requested, fallback to "wav".`);
-            break;
-    }
-    corsHeaders.set('Content-Type', contentType);
-    return new Response(audioData, {
-        status: 200,
-        headers: corsHeaders
-    });
+  if (!req.input) {
+    throw new HttpError("`input` field is required.", 400);
+  }
+  if (!req.voice) {
+    throw new HttpError("`voice` field is required.", 400);
+  }
+  const geminiTtsModel = req.model || "gemini-2.5-flash-preview-tts";
+  const geminiPayload = {
+    model: geminiTtsModel,
+    contents: [{
+      parts: [{ text: req.input }]
+    }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: {
+            voiceName: req.voice
+          }
+        }
+      }
+    },
+  };
+  const url = `${BASE_URL}/${API_VERSION}/models/${geminiTtsModel}:generateContent`;
+  const geminiApiResponse = await fetch(url, {
+    method: "POST",
+    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
+    body: JSON.stringify(geminiPayload),
+  });
+  if (!geminiApiResponse.ok) {
+    const errorBody = await geminiApiResponse.text();
+    console.error("Gemini TTS API Error:", errorBody);
+    return new Response(errorBody, fixCors({ headers: geminiApiResponse.headers, status: geminiApiResponse.status, statusText: geminiApiResponse.statusText }));
+  }
+  const geminiResponseJson = await geminiApiResponse.json();
+  const audioDataBase64 = geminiResponseJson.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!audioDataBase64) {
+    throw new HttpError("Failed to extract audio data from Gemini response.", 500);
+  }
+  const pcmData = Buffer.from(audioDataBase64, 'base64');
+  const responseFormat = req.response_format || 'wav';
+  let audioData;
+  let contentType;
+  const corsHeaders = fixCors({}).headers;
+  switch (responseFormat.toLowerCase()) {
+    case 'wav':
+      audioData = addWavHeader(pcmData);
+      contentType = 'audio/wav';
+      break;
+    case 'pcm':
+      audioData = pcmData;
+      contentType = 'audio/L16; rate=24000; channels=1';
+      break;
+    case 'mp3':
+    case 'opus':
+    case 'aac':
+    case 'flac':
+    default:
+      audioData = addWavHeader(pcmData);
+      contentType = 'audio/wav';
+      corsHeaders.set('X-Warning', `Unsupported format "${responseFormat}" requested, fallback to "wav".`);
+      break;
+  }
+  corsHeaders.set('Content-Type', contentType);
+  return new Response(audioData, {
+    status: 200,
+    headers: corsHeaders
+  });
 }
 
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
-async function handleCompletions (req, apiKey) {
+async function handleCompletions(req, apiKey) {
   const isTtsRequest = Array.isArray(req.modalities) && req.modalities.includes("audio");
   if (isTtsRequest) {
     return handleTts(req, apiKey);
@@ -340,9 +340,9 @@ async function handleCompletions (req, apiKey) {
       model = req.model;
   }
   model = model || DEFAULT_MODEL;
-  
+
   const isImageGenerationRequest = model.includes("-image");
-  
+
   let body = await transformRequest(req, model);
 
   if (isImageGenerationRequest) {
@@ -350,7 +350,7 @@ async function handleCompletions (req, apiKey) {
     body.generationConfig.responseModalities = ["TEXT", "IMAGE"];
     delete body.system_instruction;
   }
-  
+
   const extra = req.extra_body?.google;
   if (extra) {
     if (extra.safety_settings) {
@@ -365,9 +365,9 @@ async function handleCompletions (req, apiKey) {
   }
   switch (true) {
     case model.endsWith(":search"):
-      model = model.slice(0,-7);
+      model = model.slice(0, -7);
       body.tools = body.tools || [];
-      body.tools.push({"googleSearch": {}});
+      body.tools.push({ "googleSearch": {} });
       break;
     case model.endsWith(":url"):
       model = model.slice(0, -4);
@@ -472,7 +472,7 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
     const primaryType = Array.isArray(schemaNode.type)
       ? schemaNode.type.find(t => t !== "null")
       : schemaNode.type;
-    
+
     if (primaryType && typeMap[primaryType.toLowerCase()]) {
       schemaNode.type = typeMap[primaryType.toLowerCase()];
     } else {
@@ -486,32 +486,32 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
 
   if (Array.isArray(schemaNode.anyOf)) {
     schemaNode.anyOf.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
-    
+
     if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
-        const enumValues = schemaNode.anyOf
-            .map(item => item.const)
-            .filter(val => val !== "" && val !== null)
-            .map(String); 
-        if (enumValues.length > 0) {
-            schemaNode.type = 'STRING';
-            schemaNode.enum = enumValues;
-        }
+      const enumValues = schemaNode.anyOf
+        .map(item => item.const)
+        .filter(val => val !== "" && val !== null)
+        .map(String);
+      if (enumValues.length > 0) {
+        schemaNode.type = 'STRING';
+        schemaNode.enum = enumValues;
+      }
     } else if (!schemaNode.type) {
-        const firstValidItem = schemaNode.anyOf.find(item => item && (item.type || item.enum));
-        if (firstValidItem) {
-            Object.assign(schemaNode, firstValidItem);
-        }
+      const firstValidItem = schemaNode.anyOf.find(item => item && (item.type || item.enum));
+      if (firstValidItem) {
+        Object.assign(schemaNode, firstValidItem);
+      }
     }
     delete schemaNode.anyOf;
   }
-    
+
   const unsupportedKeys = [
-    'title', '$schema', '$ref', 'strict', 'exclusiveMaximum', 
+    'title', '$schema', '$ref', 'strict', 'exclusiveMaximum',
     'exclusiveMinimum', 'additionalProperties', 'oneOf', 'allOf', 'default',
     '$defs'
   ];
   unsupportedKeys.forEach(key => delete schemaNode[key]);
-  
+
   if (schemaNode.properties) {
     Object.values(schemaNode.properties).forEach(prop => transformOpenApiSchemaToGemini(prop, rootSchema, visited));
   }
@@ -553,48 +553,102 @@ const fieldsMap = {
 
 const transformConfig = (req, model) => {
   let cfg = {};
+  
+  // 1. 基础参数映射
+  const fieldsMap = {
+    frequency_penalty: "frequencyPenalty",
+    max_completion_tokens: "maxOutputTokens",
+    max_tokens: "maxOutputTokens",
+    n: "candidateCount",
+    presence_penalty: "presencePenalty",
+    seed: "seed",
+    stop: "stopSequences",
+    temperature: "temperature",
+    top_k: "topK",
+    top_p: "topP",
+  };
+
   for (let key in req) {
     const matchedKey = fieldsMap[key];
-    if (matchedKey) {
+    if (matchedKey && req[key] !== null) {
       cfg[matchedKey] = req[key];
     }
   }
+
+  // 2. Response Format (JSON Mode / JSON Schema)
   if (req.response_format) {
     switch (req.response_format.type) {
       case "json_schema":
-        adjustSchema(req.response_format);
-        cfg.responseSchema = req.response_format.json_schema?.schema;
-        if (cfg.responseSchema && "enum" in cfg.responseSchema) {
-          cfg.responseMimeType = "text/x.enum";
-          break;
+        // 如果是 JSON Schema，必须进行转换并清理不支持的关键字
+        if (req.response_format.json_schema?.schema) {
+            // 假设 adjustSchema 和 transformOpenApiSchemaToGemini 在外部定义
+            adjustSchema(req.response_format); 
+            cfg.responseSchema = req.response_format.json_schema.schema;
+            cfg.responseMimeType = "application/json";
         }
+        break;
       case "json_object":
         cfg.responseMimeType = "application/json";
         break;
       case "text":
         cfg.responseMimeType = "text/plain";
         break;
-      default:
-        throw new HttpError("Unsupported response_format.type", 400);
     }
   }
+
+  // 3. Thinking / Reasoning Effort 适配
   if (req.reasoning_effort) {
-    let thinkingBudget;
-    switch (req.reasoning_effort) {
-      case "low":
-        thinkingBudget = model?.includes("pro") ? 128 : 0;
-        break;
-      case "medium":
-        thinkingBudget = -1;
-        break;
-      case "high":
-        thinkingBudget = 24576;
-        break;
-    }
-    if (typeof thinkingBudget !== "undefined") {
-      cfg.thinkingConfig = { thinkingBudget, includeThoughts: true };
+    // 判断是否为 Gemini 3 系列 (使用 thinkingLevel)
+    const isV3 = model?.includes("gemini-3");
+    
+    if (isV3) {
+      let thinkingLevel;
+      switch (req.reasoning_effort) {
+        case "low":
+          thinkingLevel = "low";
+          break;
+        case "medium":
+          thinkingLevel = "medium"; 
+          break;
+        case "high":
+          thinkingLevel = "high";
+          break;
+        default:
+          thinkingLevel = "high";
+      }
+      cfg.thinkingConfig = { thinkingLevel, includeThoughts: true };
+    } 
+    else {
+      // Gemini 2.5 系列 (使用 thinkingBudget)
+      let thinkingBudget;
+      const isPro = model?.includes("pro"); // 2.5-pro
+      const isLite = model?.includes("lite"); // 2.5-flash-lite
+      
+      // 根据文档设定 Budget
+      switch (req.reasoning_effort) {
+        case "low":
+          // Low: 给予较低的固定 token 预算
+          thinkingBudget = isLite ? 1024 : 2048; 
+          break;
+        case "medium":
+          // Medium: 启用动态思考 (Dynamic Thinking)
+          thinkingBudget = -1; 
+          break;
+        case "high":
+          // High: 给予最大或接近最大的预算
+          // 2.5 Pro Max: 32768, Flash Max: 24576
+          thinkingBudget = isPro ? 32768 : 24576; 
+          break;
+        default:
+          thinkingBudget = -1;
+      }
+
+      if (typeof thinkingBudget !== "undefined") {
+        cfg.thinkingConfig = { thinkingBudget, includeThoughts: true };
+      }
     }
   }
+
   return cfg;
 };
 
@@ -630,7 +684,7 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
   if (!parts.calls) {
     throw new HttpError("No function calls found in the previous message", 400);
   }
-  
+
   let stringContent;
   if (Array.isArray(content)) {
     const textPart = content.find(part => part.type === 'text');
@@ -690,7 +744,7 @@ const transformFnCalls = ({ tool_calls }) => {
       console.error("Error parsing function arguments:", err);
       throw new HttpError("Invalid function arguments: " + argstr, 400);
     }
-    calls[id] = {i, name};
+    calls[id] = { i, name };
     return {
       functionCall: {
         id: id.startsWith("call_") ? null : id,
@@ -707,11 +761,11 @@ const transformMsg = async ({ content }) => {
   const parts = [];
   if (!Array.isArray(content)) {
     if (typeof content === 'string') {
-        parts.push(...parseAssistantContent(content));
+      parts.push(...parseAssistantContent(content));
     }
     return parts;
   }
-  
+
   for (const item of content) {
     switch (item.type) {
       case "input_text":
@@ -775,35 +829,35 @@ function parseAssistantContent(content) {
   const imageMarkdownRegex = /!\[gemini-image-generation\]\(data:(image\/\w+);base64,([\w+/=-]+)\)/g;
 
   if (typeof content !== 'string') {
-      return parts;
+    return parts;
   }
-  
+
   let lastIndex = 0;
   let match;
 
   while ((match = imageMarkdownRegex.exec(content)) !== null) {
-      if (match.index > lastIndex) {
-          parts.push({ text: content.substring(lastIndex, match.index) });
-      }
+    if (match.index > lastIndex) {
+      parts.push({ text: content.substring(lastIndex, match.index) });
+    }
 
-      const mimeType = match[1];
-      const data = match[2];
-      parts.push({
-          inlineData: {
-              mimeType,
-              data,
-          },
-      });
+    const mimeType = match[1];
+    const data = match[2];
+    parts.push({
+      inlineData: {
+        mimeType,
+        data,
+      },
+    });
 
-      lastIndex = match.index + match[0].length;
+    lastIndex = match.index + match[0].length;
   }
 
   if (lastIndex < content.length) {
-      parts.push({ text: content.substring(lastIndex) });
+    parts.push({ text: content.substring(lastIndex) });
   }
 
   if (parts.length === 0 && content) {
-      parts.push({ text: content });
+    parts.push({ text: content });
   }
 
   return parts;
@@ -893,19 +947,19 @@ const reverseTransformArgs = (args) => {
 
 const transformTools = (req) => {
   let tools, toolConfig; // 使用 camelCase 变量名以保持一致
-  
+
   if (req.tools) {
     const funcs = req.tools.filter(tool => tool.type === "function");
-    
+
     // 对每个函数声明应用 schema 转换
     funcs.forEach(adjustSchema);
-    
+
     // 使用正确的 Gemini 结构和 camelCase 键名: `functionDeclarations`
-    tools = [{ 
-      functionDeclarations: funcs.map(schema => schema.function) 
+    tools = [{
+      functionDeclarations: funcs.map(schema => schema.function)
     }];
   }
-  
+
   if (req.tool_choice) {
     let mode = "AUTO"; // 默认模式
     let allowedFunctionNames;
@@ -926,9 +980,9 @@ const transformTools = (req) => {
     } else if (typeof req.tool_choice === "object" && req.tool_choice.type === "function") {
       // 强制调用特定函数
       mode = "ANY";
-      allowedFunctionNames = [ req.tool_choice.function.name ];
+      allowedFunctionNames = [req.tool_choice.function.name];
     }
-    
+
     // 使用正确的 camelCase 键名: `functionCallingConfig`, `allowedFunctionNames`
     toolConfig = {
       functionCallingConfig: {
@@ -940,7 +994,7 @@ const transformTools = (req) => {
   }
 
   // 返回转换后的对象，注意变量名也是 camelCase
-  return { tools, tool_config: toolConfig }; 
+  return { tools, tool_config: toolConfig };
 };
 
 
@@ -1051,7 +1105,7 @@ const transformUsage = (data) => ({
       ?.find(el => el.modality === "AUDIO")
       ?.tokenCount,
     cached_tokens: data.cacheTokensDetails
-      ?.reduce((acc,el) => acc + el.tokenCount, 0),
+      ?.reduce((acc, el) => acc + el.tokenCount, 0),
   }),
 });
 
@@ -1077,19 +1131,19 @@ const processCompletionsResponse = (data, model, id) => {
   const obj = {
     id,
     choices: data.candidates.map(cand => transformCandidatesMessage(cand)),
-    created: Math.floor(Date.now()/1000),
+    created: Math.floor(Date.now() / 1000),
     model: data.modelVersion ?? model,
     object: "chat.completion",
     usage: data.usageMetadata && transformUsage(data.usageMetadata),
   };
-  if (obj.choices.length === 0 ) {
+  if (obj.choices.length === 0) {
     checkPromptBlock(obj.choices, data.promptFeedback, "message");
   }
   return JSON.stringify(obj, null, 2);
 };
 
 const responseLineRE = /^data: (.*)(?:\n\n|\r\r|\r\n\r\n)/;
-function parseStream (chunk, controller) {
+function parseStream(chunk, controller) {
   this.buffer += chunk;
   do {
     const match = this.buffer.match(responseLineRE);
@@ -1098,7 +1152,7 @@ function parseStream (chunk, controller) {
     this.buffer = this.buffer.substring(match[0].length);
   } while (true);
 }
-function parseStreamFlush (controller) {
+function parseStreamFlush(controller) {
   if (this.buffer) {
     console.error("Invalid data:", this.buffer);
     controller.enqueue(this.buffer);
@@ -1108,20 +1162,19 @@ function parseStreamFlush (controller) {
 
 const delimiter = "\n\n";
 const sseline = (obj) => {
-  obj.created = Math.floor(Date.now()/1000);
+  obj.created = Math.floor(Date.now() / 1000);
   return "data: " + JSON.stringify(obj) + delimiter;
 };
-function toOpenAiStream (line, controller) {
+function toOpenAiStream(line, controller) {
   let data;
   try {
     data = JSON.parse(line);
     if (!data.candidates) {
       throw new Error("Invalid completion chunk object");
     }
-  } catch (err)
-  {
+  } catch (err) {
     console.error("Error parsing response:", err);
-    if (!this.shared.is_buffers_rest) { line =+ delimiter; }
+    if (!this.shared.is_buffers_rest) { line = + delimiter; }
     controller.enqueue(line);
     return;
   }
@@ -1171,7 +1224,7 @@ function toOpenAiStream (line, controller) {
   cand.delta = {};
   this.last[cand.index] = obj;
 }
-function toOpenAiStreamFlush (controller) {
+function toOpenAiStreamFlush(controller) {
   if (this.last.length > 0) {
     for (const obj of this.last) {
       controller.enqueue(sseline(obj));
@@ -1179,3 +1232,5 @@ function toOpenAiStreamFlush (controller) {
     controller.enqueue("data: [DONE]" + delimiter);
   }
 }
+
+// thinkingBudget 更新为 thinkingLevel
