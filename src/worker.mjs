@@ -3,8 +3,12 @@ import { Buffer } from "node:buffer";
 // 定义图片生成模型列表，用于特殊处理配置
 const IMAGE_MODELS = [
   "gemini-3-pro-image-preview",
+  "nano banana pro",
   "gemini-2.5-flash-image",
-  "gemini-2.0-flash-exp-image"
+  "gemini-2.5-flash-image-preview",
+  "Nano Banana",
+  "gemini-2.0-flash-exp-image",
+  "gemini-2.0-flash-exp-image-generation",
 ];
 
 export default {
