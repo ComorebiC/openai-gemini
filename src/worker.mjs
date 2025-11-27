@@ -1,5 +1,12 @@
 import { Buffer } from "node:buffer";
 
+// 定义图片生成模型列表，用于特殊处理配置
+const IMAGE_MODELS = [
+  "gemini-3-pro-image-preview",
+  "gemini-2.5-flash-image",
+  "gemini-2.0-flash-exp-image"
+];
+
 export default {
   async fetch(request) {
     if (request.method === "OPTIONS") {
@@ -341,13 +348,16 @@ async function handleCompletions(req, apiKey) {
   }
   model = model || DEFAULT_MODEL;
 
-  const isImageGenerationRequest = model.includes("-image");
+  // 融合原有的后缀检查和新的 IMAGE_MODELS 列表
+  const isImageGenerationRequest = IMAGE_MODELS.includes(model) || model.includes("-image");
 
   let body = await transformRequest(req, model);
 
   if (isImageGenerationRequest) {
     body.generationConfig = body.generationConfig || {};
-    body.generationConfig.responseModalities = ["TEXT", "IMAGE"];
+    if (!body.generationConfig.responseModalities) {
+        body.generationConfig.responseModalities = ["TEXT", "IMAGE"];
+    }
     delete body.system_instruction;
   }
 
@@ -361,6 +371,9 @@ async function handleCompletions(req, apiKey) {
     }
     if (extra.thinking_config) {
       body.generationConfig.thinkingConfig = extra.thinking_config;
+    }
+    if (extra.image_config) {
+        body.generationConfig.imageConfig = extra.image_config;
     }
   }
   switch (true) {
@@ -430,7 +443,6 @@ async function handleCompletions(req, apiKey) {
 
 const resolveRef = (ref, rootSchema) => {
   if (!ref.startsWith('#/')) {
-    // We only support local refs for now
     return null;
   }
   const path = ref.substring(2).split('/');
@@ -538,23 +550,10 @@ const safetySettings = harmCategory.map(category => ({
   category,
   threshold: "BLOCK_NONE",
 }));
-const fieldsMap = {
-  frequency_penalty: "frequencyPenalty",
-  max_completion_tokens: "maxOutputTokens",
-  max_tokens: "maxOutputTokens",
-  n: "candidateCount",
-  presence_penalty: "presencePenalty",
-  seed: "seed",
-  stop: "stopSequences",
-  temperature: "temperature",
-  top_k: "topK",
-  top_p: "topP",
-};
 
 const transformConfig = (req, model) => {
   let cfg = {};
   
-  // 1. 基础参数映射
   const fieldsMap = {
     frequency_penalty: "frequencyPenalty",
     max_completion_tokens: "maxOutputTokens",
@@ -575,13 +574,10 @@ const transformConfig = (req, model) => {
     }
   }
 
-  // 2. Response Format (JSON Mode / JSON Schema)
   if (req.response_format) {
     switch (req.response_format.type) {
       case "json_schema":
-        // 如果是 JSON Schema，必须进行转换并清理不支持的关键字
         if (req.response_format.json_schema?.schema) {
-            // 假设 adjustSchema 和 transformOpenApiSchemaToGemini 在外部定义
             adjustSchema(req.response_format); 
             cfg.responseSchema = req.response_format.json_schema.schema;
             cfg.responseMimeType = "application/json";
@@ -596,53 +592,30 @@ const transformConfig = (req, model) => {
     }
   }
 
-  // 3. Thinking / Reasoning Effort 适配
   if (req.reasoning_effort) {
-    // 判断是否为 Gemini 3 系列 (使用 thinkingLevel)
     const isV3 = model?.includes("gemini-3");
     
     if (isV3) {
       let thinkingLevel;
       switch (req.reasoning_effort) {
-        case "low":
-          thinkingLevel = "low";
-          break;
-        case "medium":
-          thinkingLevel = "medium"; 
-          break;
-        case "high":
-          thinkingLevel = "high";
-          break;
-        default:
-          thinkingLevel = "high";
+        case "low": thinkingLevel = "LOW"; break;
+        case "medium": thinkingLevel = "MEDIUM"; break;
+        case "high": thinkingLevel = "HIGH"; break;
+        default: thinkingLevel = "HIGH";
       }
       cfg.thinkingConfig = { thinkingLevel, includeThoughts: true };
     } 
     else {
-      // Gemini 2.5 系列 (使用 thinkingBudget)
       let thinkingBudget;
-      const isPro = model?.includes("pro"); // 2.5-pro
-      const isLite = model?.includes("lite"); // 2.5-flash-lite
+      const isPro = model?.includes("pro");
+      const isLite = model?.includes("lite");
       
-      // 根据文档设定 Budget
       switch (req.reasoning_effort) {
-        case "low":
-          // Low: 给予较低的固定 token 预算
-          thinkingBudget = isLite ? 1024 : 2048; 
-          break;
-        case "medium":
-          // Medium: 启用动态思考 (Dynamic Thinking)
-          thinkingBudget = -1; 
-          break;
-        case "high":
-          // High: 给予最大或接近最大的预算
-          // 2.5 Pro Max: 32768, Flash Max: 24576
-          thinkingBudget = isPro ? 32768 : 24576; 
-          break;
-        default:
-          thinkingBudget = -1;
+        case "low": thinkingBudget = isLite ? 1024 : 2048; break;
+        case "medium": thinkingBudget = -1; break;
+        case "high": thinkingBudget = isPro ? 32768 : 24576; break;
+        default: thinkingBudget = -1;
       }
-
       if (typeof thinkingBudget !== "undefined") {
         cfg.thinkingConfig = { thinkingBudget, includeThoughts: true };
       }
@@ -699,15 +672,11 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
 
   let response;
   try {
-    // First, attempt to parse the string as JSON
     response = JSON.parse(stringContent);
   } catch (err) {
-    // If parsing fails, treat it as a plain string and wrap it in an object.
-    // This makes it compatible with Gemini's structured response requirement.
     response = { result: stringContent };
   }
 
-  // This check is still useful for cases where the parsed JSON is not an object (e.g., a number, a boolean, or an array).
   if (typeof response !== "object" || response === null || Array.isArray(response)) {
     response = { result: response };
   }
@@ -731,7 +700,12 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
   };
 };
 
-const transformFnCalls = ({ tool_calls }) => {
+const transformFnCalls = (message) => {
+  const { tool_calls } = message;
+  const signature = message.thought_signature || 
+                    message.extra_content?.google?.thought_signature ||
+                    tool_calls?.[0]?.extra_content?.google?.thought_signature;
+
   const calls = {};
   const parts = tool_calls.map(({ function: { arguments: argstr, name }, id, type }, i) => {
     if (type !== "function") {
@@ -745,23 +719,69 @@ const transformFnCalls = ({ tool_calls }) => {
       throw new HttpError("Invalid function arguments: " + argstr, 400);
     }
     calls[id] = { i, name };
-    return {
+    
+    const part = {
       functionCall: {
         id: id.startsWith("call_") ? null : id,
         name,
         args,
       }
     };
+    if (i === 0 && signature) {
+        part.thoughtSignature = signature;
+    }
+    return part;
   });
   parts.calls = calls;
   return parts;
 };
 
+function parseAssistantContent(content, stripImages = false) {
+  const parts = [];
+  const imageMarkdownRegex = /!\[gemini-image-generation\]\(data:(image\/\w+);base64,([\w+/=-]+)\)/g;
+
+  if (typeof content !== 'string') {
+    return parts;
+  }
+
+  let lastIndex = 0;
+  let match;
+
+  while ((match = imageMarkdownRegex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ text: content.substring(lastIndex, match.index) });
+    }
+
+    if (!stripImages) {
+        const mimeType = match[1];
+        const data = match[2];
+        parts.push({
+          inlineData: {
+            mimeType,
+            data,
+          },
+        });
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (lastIndex < content.length) {
+    parts.push({ text: content.substring(lastIndex) });
+  }
+
+  if (parts.length === 0 && content && !stripImages) {
+    parts.push({ text: content });
+  }
+
+  return parts;
+}
+
 const transformMsg = async ({ content }) => {
   const parts = [];
   if (!Array.isArray(content)) {
     if (typeof content === 'string') {
-      parts.push(...parseAssistantContent(content));
+      parts.push(...parseAssistantContent(content, false));
     }
     return parts;
   }
@@ -771,7 +791,7 @@ const transformMsg = async ({ content }) => {
       case "input_text":
       case "text":
         if (item.text) {
-          parts.push(...parseAssistantContent(item.text));
+          parts.push(...parseAssistantContent(item.text, false));
         }
         break;
       case "image_url":
@@ -824,49 +844,13 @@ const transformMsg = async ({ content }) => {
   return parts;
 };
 
-function parseAssistantContent(content) {
-  const parts = [];
-  const imageMarkdownRegex = /!\[gemini-image-generation\]\(data:(image\/\w+);base64,([\w+/=-]+)\)/g;
-
-  if (typeof content !== 'string') {
-    return parts;
-  }
-
-  let lastIndex = 0;
-  let match;
-
-  while ((match = imageMarkdownRegex.exec(content)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push({ text: content.substring(lastIndex, match.index) });
-    }
-
-    const mimeType = match[1];
-    const data = match[2];
-    parts.push({
-      inlineData: {
-        mimeType,
-        data,
-      },
-    });
-
-    lastIndex = match.index + match[0].length;
-  }
-
-  if (lastIndex < content.length) {
-    parts.push({ text: content.substring(lastIndex) });
-  }
-
-  if (parts.length === 0 && content) {
-    parts.push({ text: content });
-  }
-
-  return parts;
-}
-
-const transformMessages = async (messages) => {
+const transformMessages = async (messages, model) => {
   if (!messages) { return []; }
   const contents = [];
   let system_instruction;
+
+  const isV3ImageModel = model && model.includes("gemini-3") && model.includes("image");
+
   for (const item of messages) {
     switch (item.role) {
       case "system":
@@ -883,9 +867,40 @@ const transformMessages = async (messages) => {
         continue;
       case "assistant":
         item.role = "model";
+        let modelParts = [];
+        
+        if (item.reasoning_content) {
+            modelParts.push({ text: item.reasoning_content, thought: true });
+        }
+
+        if (item.tool_calls) {
+            const toolParts = transformFnCalls(item);
+            modelParts.push(...toolParts);
+            // 【关键修复】: 手动将 .calls 属性复制到 modelParts，防止扩展运算符导致属性丢失
+            modelParts.calls = toolParts.calls;
+        } else {
+            const signature = item.thought_signature || item.extra_content?.google?.thought_signature;
+            
+            if (isV3ImageModel && signature) {
+               let rawContent = typeof item.content === 'string' ? item.content : "";
+               if (Array.isArray(item.content)) {
+                   rawContent = item.content.map(c => c.text || "").join("");
+               }
+               const textParts = parseAssistantContent(rawContent, true); 
+               const validTextParts = textParts.filter(p => p.text !== undefined && p.text !== "");
+
+               modelParts.push(...validTextParts);
+               modelParts.push({ thoughtSignature: signature });
+
+            } else {
+               const contentParts = await transformMsg(item);
+               modelParts.push(...contentParts);
+            }
+        }
+
         contents.push({
           role: item.role,
-          parts: item.tool_calls ? transformFnCalls(item) : await transformMsg(item),
+          parts: modelParts,
         });
         continue;
       case "user":
@@ -908,35 +923,30 @@ const transformMessages = async (messages) => {
 
 const reverseTransformValue = (value) => {
   if (typeof value !== 'string') {
-    return value; // 如果不是字符串，直接返回
+    return value; 
   }
-  // 检查布尔值
   if (value === 'true') return true;
   if (value === 'false') return false;
-  // 检查 null
   if (value === 'null') return null;
-  // 检查数字 (整数或浮点数)
   if (value.trim() !== '' && !isNaN(Number(value)) && Number(value).toString() === value) {
     return Number(value);
   }
-  return value; // 默认返回原始字符串
+  return value; 
 };
 
 const reverseTransformArgs = (args) => {
   if (typeof args !== 'object' || args === null) {
     return args;
   }
-
   if (Array.isArray(args)) {
-    return args.map(item => reverseTransformArgs(item)); // 递归处理数组
+    return args.map(item => reverseTransformArgs(item)); 
   }
-
   const newArgs = {};
   for (const key in args) {
     if (Object.prototype.hasOwnProperty.call(args, key)) {
       const value = args[key];
       if (typeof value === 'object') {
-        newArgs[key] = reverseTransformArgs(value); // 递归处理嵌套对象
+        newArgs[key] = reverseTransformArgs(value); 
       } else {
         newArgs[key] = reverseTransformValue(value);
       }
@@ -946,60 +956,45 @@ const reverseTransformArgs = (args) => {
 };
 
 const transformTools = (req) => {
-  let tools, toolConfig; // 使用 camelCase 变量名以保持一致
+  let tools, toolConfig; 
 
   if (req.tools) {
     const funcs = req.tools.filter(tool => tool.type === "function");
-
-    // 对每个函数声明应用 schema 转换
     funcs.forEach(adjustSchema);
-
-    // 使用正确的 Gemini 结构和 camelCase 键名: `functionDeclarations`
     tools = [{
       functionDeclarations: funcs.map(schema => schema.function)
     }];
   }
 
   if (req.tool_choice) {
-    let mode = "AUTO"; // 默认模式
+    let mode = "AUTO"; 
     let allowedFunctionNames;
 
     if (typeof req.tool_choice === "string") {
       switch (req.tool_choice) {
-        case "auto":
-          mode = "AUTO";
-          break;
-        case "required":
-          // OpenAI的 "required" 意味着模型必须调用一个工具，这最接近Gemini的 "ANY"
-          mode = "ANY";
-          break;
-        case "none":
-          mode = "NONE";
-          break;
+        case "auto": mode = "AUTO"; break;
+        case "required": mode = "ANY"; break;
+        case "none": mode = "NONE"; break;
       }
     } else if (typeof req.tool_choice === "object" && req.tool_choice.type === "function") {
-      // 强制调用特定函数
       mode = "ANY";
       allowedFunctionNames = [req.tool_choice.function.name];
     }
 
-    // 使用正确的 camelCase 键名: `functionCallingConfig`, `allowedFunctionNames`
     toolConfig = {
       functionCallingConfig: {
         mode,
-        // 仅当存在时才添加 allowedFunctionNames
         ...(allowedFunctionNames && { allowedFunctionNames })
       }
     };
   }
 
-  // 返回转换后的对象，注意变量名也是 camelCase
   return { tools, tool_config: toolConfig };
 };
 
 
 const transformRequest = async (req, model) => ({
-  ...await transformMessages(req.messages),
+  ...await transformMessages(req.messages, model),
   safetySettings,
   generationConfig: transformConfig(req, model),
   ...transformTools(req),
@@ -1022,6 +1017,7 @@ const transformCandidates = (key, cand) => {
   const message = { role: "assistant" };
   const contentParts = [];
   const reasoningParts = [];
+  let thoughtSignature = null; 
 
   for (const part of cand.content?.parts ?? []) {
     if (part.functionCall) {
@@ -1035,6 +1031,9 @@ const transformCandidates = (key, cand) => {
           arguments: JSON.stringify(reverseTransformArgs(fc.args)),
         }
       });
+      if (part.thoughtSignature) {
+          thoughtSignature = part.thoughtSignature;
+      }
     } else if (part.thought === true && part.text) {
       reasoningParts.push(part.text);
     } else if (part.text) {
@@ -1043,6 +1042,11 @@ const transformCandidates = (key, cand) => {
       const { mimeType, data } = part.inlineData;
       const markdownImage = `![gemini-image-generation](data:${mimeType};base64,${data})`;
       contentParts.push(markdownImage);
+      if (part.thoughtSignature) {
+          thoughtSignature = part.thoughtSignature;
+      }
+    } else if (part.thoughtSignature) {
+      thoughtSignature = part.thoughtSignature;
     }
   }
 
@@ -1074,6 +1078,20 @@ const transformCandidates = (key, cand) => {
   }
   if (cand.url_context_metadata) {
     message.url_context_metadata = cand.url_context_metadata;
+  }
+
+  if (thoughtSignature) {
+    if (message.tool_calls && message.tool_calls.length > 0) {
+        const firstToolCall = message.tool_calls[0];
+        if (!firstToolCall.extra_content) firstToolCall.extra_content = {};
+        if (!firstToolCall.extra_content.google) firstToolCall.extra_content.google = {};
+        firstToolCall.extra_content.google.thought_signature = thoughtSignature;
+    } else {
+        if (!message.extra_content) message.extra_content = {};
+        if (!message.extra_content.google) message.extra_content.google = {};
+        message.extra_content.google.thought_signature = thoughtSignature;
+        message.thought_signature = thoughtSignature;
+    }
   }
 
   return {
@@ -1209,11 +1227,12 @@ function toOpenAiStream(line, controller) {
   const hasContent = "content" in cand.delta;
   const hasReasoning = "reasoning_content" in cand.delta;
   const hasToolCalls = "tool_calls" in cand.delta;
-  // 因为元数据也被添加到了 delta 对象中，所以也要检查它们
   const hasGrounding = "grounding_metadata" in cand.delta;
   const hasUrlContext = "url_context_metadata" in cand.delta;
+  const hasSignature = "thought_signature" in cand.delta || 
+                       (cand.delta.extra_content?.google?.thought_signature);
 
-  if (hasContent || hasReasoning || hasToolCalls || hasGrounding || hasUrlContext) {
+  if (hasContent || hasReasoning || hasToolCalls || hasGrounding || hasUrlContext || hasSignature) {
     controller.enqueue(sseline(obj));
   }
 
@@ -1232,5 +1251,3 @@ function toOpenAiStreamFlush(controller) {
     controller.enqueue("data: [DONE]" + delimiter);
   }
 }
-
-// thinkingBudget 更新为 thinkingLevel
