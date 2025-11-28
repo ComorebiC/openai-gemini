@@ -742,7 +742,7 @@ const transformFnCalls = (message) => {
 
 function parseAssistantContent(content, stripImages = false) {
   const parts = [];
-  const imageMarkdownRegex = /!\[gemini-image-generation\]\(data:(image\/\w+);base64,([\w+/=-]+)\)/g;
+  const imageMarkdownRegex = /!\[gemini-image-generation\]\(data:(image\/\w+);base64,([^)]+)\)/g;
 
   if (typeof content !== 'string') {
     return parts;
