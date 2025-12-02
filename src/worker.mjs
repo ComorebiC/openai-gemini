@@ -397,6 +397,13 @@ async function handleCompletions(req, apiKey) {
       body.tools.push({ "code_execution": {} });
       break;
   }
+
+  // // === 【添加调试代码 START】 ===
+  // console.log("-------------- [DEBUG] Request to Gemini --------------");
+  // console.log(JSON.stringify(body, null, 2)); // 打印转换后的 Gemini 格式 JSON
+  // console.log("-------------------------------------------------------");
+  // // === 【添加调试代码 END】 ===
+
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
   let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
   if (req.stream) { url += "?alt=sse"; }
@@ -429,6 +436,13 @@ async function handleCompletions(req, apiKey) {
         .pipeThrough(new TextEncoderStream());
     } else {
       body = await response.text();
+
+      // // === 【添加调试代码 START】 ===
+      // console.log("-------------- [DEBUG] Response from Gemini (Raw) --------------");
+      // console.log(body); // 打印 Gemini 返回的原始数据
+      // console.log("----------------------------------------------------------------");
+      // // === 【添加调试代码 END】 ===
+
       try {
         body = JSON.parse(body);
         if (!body.candidates) {
@@ -438,7 +452,7 @@ async function handleCompletions(req, apiKey) {
         console.error("Error parsing response:", err);
         return new Response(body, fixCors(response));
       }
-      body = processCompletionsResponse(body, model, id);
+      body = await processCompletionsResponse(body, model, id);
     }
   }
   return new Response(body, fixCors(response));
@@ -597,7 +611,7 @@ const transformConfig = (req, model) => {
   }
 
   if (req.reasoning_effort) {
-    const isV3 = model?.includes("gemini-3");
+    const isV3 = model?.includes("gemini-3") || model?.includes("nano banana pro");
     
     if (isV3) {
       let thinkingLevel;
@@ -740,52 +754,109 @@ const transformFnCalls = (message) => {
   return parts;
 };
 
-function parseAssistantContent(content, stripImages = false) {
-  const parts = [];
-  const imageMarkdownRegex = /!\[gemini-image-generation\]\(data:(image\/\w+);base64,([^)]+)\)/g;
+async function uploadImageToUrusai(base64Data, mimeType) {
+  try {
+    const buffer = Buffer.from(base64Data, 'base64');
+    const blob = new Blob([buffer], { type: mimeType });
+    const formData = new FormData();
+    const ext = mimeType.split('/')[1] || 'png';
+    formData.append('file', blob, `image.${ext}`);
+    formData.append('r18', '0'); // 根据文档默认设置为0
 
+    const res = await fetch('https://api.urusai.cc/v1/upload', {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!res.ok) {
+      console.error(`Urusai upload failed: ${res.status} ${res.statusText}`);
+      return null;
+    }
+
+    const json = await res.json();
+    if (json.status === 'success' && json.data && json.data.url_direct) {
+      return json.data.url_direct;
+    }
+    return null;
+  } catch (e) {
+    console.error("Error uploading to Urusai:", e);
+    return null;
+  }
+}
+
+// 辅助函数：从文本中提取 Base64 图片 Markdown 并转换为 parts
+// stripImages = true: 移除 Markdown 图片链接，并且不生成 inlineData
+async function parseAssistantContent(content, isV3 = false) {
+  const parts = [];
   if (typeof content !== 'string') {
     return parts;
   }
+
+  // 匹配 Markdown 图片，支持 Base64 和 URL 两种格式
+  // Group 1: mimeType (Base64 case)
+  // Group 2: data (Base64 case)
+  // Group 3: url (URL case)
+  const imageMarkdownRegex = /!\[gemini-image-generation\]\((?:data:(?<mimeType>image\/\w+);base64,(?<data>[^)]+)|(?<url>https?:\/\/[^)]+))\)/g;
 
   let lastIndex = 0;
   let match;
 
   while ((match = imageMarkdownRegex.exec(content)) !== null) {
+    // 1. 提取图片之前的文本
     if (match.index > lastIndex) {
-      parts.push({ text: content.substring(lastIndex, match.index) });
+      const textBefore = content.substring(lastIndex, match.index);
+      if (textBefore) {
+        parts.push({ text: textBefore });
+      }
     }
 
-    if (!stripImages) {
-        const mimeType = match[1];
-        const data = match[2];
+    // 2. 处理图片部分
+    if (isV3) {
+      // V3及以上：直接忽略图片部分（即“删除”），不做任何操作
+    } else {
+      // V3以下：需要确保是 inlineData
+      const { mimeType, data, url } = match.groups;
+
+      if (url) {
+        // 如果是 URL，下载并转 Base64
+        try {
+          const imgPart = await parseImg(url);
+          parts.push(imgPart);
+        } catch (err) {
+          console.error(`Failed to convert history URL back to Base64: ${url}`, err);
+          // 转换失败忽略该图片，避免报错中断
+        }
+      } else if (mimeType && data) {
+        // 如果已经是 Base64，直接保留
         parts.push({
           inlineData: {
             mimeType,
-            data,
+            data: data.replace(/\s/g, ''),
           },
         });
+      }
     }
 
     lastIndex = match.index + match[0].length;
   }
 
+  // 3. 提取剩余文本
   if (lastIndex < content.length) {
-    parts.push({ text: content.substring(lastIndex) });
-  }
-
-  if (parts.length === 0 && content && !stripImages) {
-    parts.push({ text: content });
+    const textAfter = content.substring(lastIndex);
+    if (textAfter) {
+      parts.push({ text: textAfter });
+    }
   }
 
   return parts;
 }
 
-const transformMsg = async ({ content }) => {
+const transformMsg = async ({ content }, isV3 = false) => {
   const parts = [];
   if (!Array.isArray(content)) {
     if (typeof content === 'string') {
-      parts.push(...parseAssistantContent(content, false));
+      // 传入 isV3 参数
+      parts.push(...await parseAssistantContent(content, isV3));
     }
     return parts;
   }
@@ -795,7 +866,8 @@ const transformMsg = async ({ content }) => {
       case "input_text":
       case "text":
         if (item.text) {
-          parts.push(...parseAssistantContent(item.text, false));
+          // 传入 isV3 参数
+          parts.push(...await parseAssistantContent(item.text, isV3));
         }
         break;
       case "image_url":
@@ -842,7 +914,8 @@ const transformMsg = async ({ content }) => {
         throw new HttpError(`Unknown "content" item type: "${item.type}"`, 400);
     }
   }
-  if (content.every(item => item.type === "image_url")) {
+  // 如果全是图片，Gemini有时候需要一个空的 text part
+  if (parts.every(p => p.inlineData)) {
     parts.push({ text: "" });
   }
   return parts;
@@ -853,12 +926,15 @@ const transformMessages = async (messages, model) => {
   const contents = [];
   let system_instruction;
 
-  const isV3ImageModel = model && model.includes("gemini-3") && model.includes("image");
+  // 判断是否为 V3+ 模型 (Gemini 3 Pro 等)
+  const isV3 = model && model.includes("gemini-3");
+  // 判断是否为 V3+ 图片模型 (用于特殊的 thought signature 处理逻辑，如果需要的话)
+  const isV3ImageModel = isV3 && model.includes("image");
 
   for (const item of messages) {
     switch (item.role) {
       case "system":
-        system_instruction = { parts: await transformMsg(item) };
+        system_instruction = { parts: await transformMsg(item, isV3) };
         continue;
       case "tool":
         let { role: r, parts: p } = contents[contents.length - 1] ?? {};
@@ -883,34 +959,38 @@ const transformMessages = async (messages, model) => {
             // 【关键修复】: 手动将 .calls 属性复制到 modelParts，防止扩展运算符导致属性丢失
             modelParts.calls = toolParts.calls;
         } else {
-            const signature = item.thought_signature || item.extra_content?.google?.thought_signature;
-            
-            if (isV3ImageModel && signature) {
-               let rawContent = typeof item.content === 'string' ? item.content : "";
-               if (Array.isArray(item.content)) {
-                   rawContent = item.content.map(c => c.text || "").join("");
-               }
-               const textParts = parseAssistantContent(rawContent, true); 
-               const validTextParts = textParts.filter(p => p.text !== undefined && p.text !== "");
+             // 这里的 content 可能是包含 ![gemini-image-generation] 的字符串
+             const contentParts = await transformMsg(item, isV3);
+          
+             // 过滤掉因为移除图片后产生的空文本节点 (除了本来就是纯空的情况)
+             const validContentParts = contentParts.filter(p => {
+                if (p.text !== undefined) return p.text !== ""; // 移除空字符串
+                return true; // 保留 inlineData 或 functionCall 等
+             });
+   
+             if (validContentParts.length > 0) {
+               modelParts.push(...validContentParts);
+             }
 
-               modelParts.push(...validTextParts);
-               modelParts.push({ thoughtSignature: signature });
-
-            } else {
-               const contentParts = await transformMsg(item);
-               modelParts.push(...contentParts);
-            }
+             // 处理 thought_signature
+             const signature = item.thought_signature || item.extra_content?.google?.thought_signature;
+             if (signature) {
+                modelParts.push({ thoughtSignature: signature });
+             }
         }
-
-        contents.push({
-          role: item.role,
-          parts: modelParts,
-        });
+        
+        // 只有当 parts 不为空时才推入 contents，防止 Gemini 报错
+        if (modelParts.length > 0) {
+            contents.push({
+              role: item.role,
+              parts: modelParts,
+            });
+        }
         continue;
       case "user":
         contents.push({
           role: item.role,
-          parts: item.tool_calls ? transformFnCalls(item) : await transformMsg(item)
+          parts: item.tool_calls ? transformFnCalls(item) : await transformMsg(item, isV3)
         });
         break;
       default:
@@ -1017,7 +1097,8 @@ const reasonsMap = {
   "RECITATION": "content_filter",
 };
 
-const transformCandidates = (key, cand) => {
+// 变为 async 函数
+const transformCandidates = async (key, cand) => {
   const message = { role: "assistant" };
   const contentParts = [];
   const reasoningParts = [];
@@ -1043,9 +1124,24 @@ const transformCandidates = (key, cand) => {
     } else if (part.text) {
       contentParts.push(part.text);
     } else if (part.inlineData) {
+      // --- 图片生成处理逻辑 START ---
       const { mimeType, data } = part.inlineData;
-      const markdownImage = `![gemini-image-generation](data:${mimeType};base64,${data})`;
+      let markdownImage;
+
+      // 尝试上传到图床
+      const imageUrl = await uploadImageToUrusai(data, mimeType);
+      
+      if (imageUrl) {
+        // 上传成功，使用 URL
+        markdownImage = `![gemini-image-generation](${imageUrl})`;
+      } else {
+        // 上传失败，回退到 Base64
+        markdownImage = `![gemini-image-generation](data:${mimeType};base64,${data})`;
+      }
+      
       contentParts.push(markdownImage);
+      // --- 图片生成处理逻辑 END ---
+      
       if (part.thoughtSignature) {
           thoughtSignature = part.thoughtSignature;
       }
@@ -1106,8 +1202,8 @@ const transformCandidates = (key, cand) => {
   };
 };
 
-const transformCandidatesMessage = (cand) => transformCandidates("message", cand);
-const transformCandidatesDelta = (cand) => transformCandidates("delta", cand);
+const transformCandidatesMessage = async (cand) => await transformCandidates("message", cand);
+const transformCandidatesDelta = async (cand) => await transformCandidates("delta", cand);
 
 const notEmpty = (el) => Object.values(el).some(Boolean) ? el : undefined;
 
@@ -1149,10 +1245,14 @@ const checkPromptBlock = (choices, promptFeedback, key) => {
   return true;
 };
 
-const processCompletionsResponse = (data, model, id) => {
+// 变为 async 函数
+const processCompletionsResponse = async (data, model, id) => {
+  // 处理异步转换
+  const choices = await Promise.all(data.candidates.map(cand => transformCandidatesMessage(cand)));
+
   const obj = {
     id,
-    choices: data.candidates.map(cand => transformCandidatesMessage(cand)),
+    choices: choices,
     created: Math.floor(Date.now() / 1000),
     model: data.modelVersion ?? model,
     object: "chat.completion",
@@ -1166,6 +1266,11 @@ const processCompletionsResponse = (data, model, id) => {
 
 const responseLineRE = /^data: (.*)(?:\n\n|\r\r|\r\n\r\n)/;
 function parseStream(chunk, controller) {
+  // // === 【添加调试代码 START】 ===
+  // console.log("-------------- [DEBUG] Response from Gemini (Raw) --------------");
+  // console.log("[DEBUG Stream Chunk]:", chunk); // 打印 Gemini 返回的原始数据
+  // console.log("----------------------------------------------------------------");
+  // // === 【添加调试代码 END】 ===
   this.buffer += chunk;
   do {
     const match = this.buffer.match(responseLineRE);
@@ -1187,7 +1292,9 @@ const sseline = (obj) => {
   obj.created = Math.floor(Date.now() / 1000);
   return "data: " + JSON.stringify(obj) + delimiter;
 };
-function toOpenAiStream(line, controller) {
+
+// 变为 async 函数
+async function toOpenAiStream(line, controller) {
   let data;
   try {
     data = JSON.parse(line);
@@ -1200,9 +1307,13 @@ function toOpenAiStream(line, controller) {
     controller.enqueue(line);
     return;
   }
+  
+  // 处理异步转换，尤其是图片上传
+  const choices = await Promise.all(data.candidates.map(cand => transformCandidatesDelta(cand)));
+
   const obj = {
     id: this.id,
-    choices: data.candidates.map(cand => transformCandidatesDelta(cand)),
+    choices: choices,
     model: data.modelVersion ?? this.model,
     object: "chat.completion.chunk",
     usage: data.usageMetadata && this.streamIncludeUsage ? null : undefined,
