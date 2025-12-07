@@ -481,6 +481,7 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
   }
   visited.add(schemaNode);
 
+  // 1. 处理 $ref
   if (schemaNode.$ref) {
     const resolved = resolveRef(schemaNode.$ref, rootSchema);
     if (resolved) {
@@ -489,16 +490,36 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
     }
   }
 
+  // 2. 处理 allOf (关键修复：合并 allOf 中的属性到当前节点)
+  if (Array.isArray(schemaNode.allOf)) {
+    schemaNode.allOf.forEach(item => {
+      transformOpenApiSchemaToGemini(item, rootSchema, visited);
+      // 合并 properties
+      if (item.properties) {
+        schemaNode.properties = { ...item.properties, ...schemaNode.properties };
+      }
+      // 合并 required
+      if (item.required) {
+        schemaNode.required = [...(schemaNode.required || []), ...item.required];
+      }
+      // 这里的简单合并适用于大多数 OpenAI Schema 场景
+    });
+    delete schemaNode.allOf;
+  }
+
+  // 3. 递归处理数组
   if (Array.isArray(schemaNode)) {
     schemaNode.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
     return;
   }
 
+  // 4. 类型映射
   if (schemaNode.type) {
     const typeMap = {
       "string": "STRING", "number": "NUMBER", "integer": "INTEGER",
       "boolean": "BOOLEAN", "array": "ARRAY", "object": "OBJECT",
     };
+    // 处理 type: ["string", "null"] 的情况
     const primaryType = Array.isArray(schemaNode.type)
       ? schemaNode.type.find(t => t !== "null")
       : schemaNode.type;
@@ -506,17 +527,21 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
     if (primaryType && typeMap[primaryType.toLowerCase()]) {
       schemaNode.type = typeMap[primaryType.toLowerCase()];
     } else {
-      delete schemaNode.type;
+      // 如果无法映射，Gemini 可能不接受，最好删除或设为 STRING
+      // delete schemaNode.type; 
     }
   }
 
+  // 5. 补全 ARRAY 的 items
   if (schemaNode.type === 'ARRAY' && !schemaNode.items) {
     schemaNode.items = { type: 'OBJECT' };
   }
 
+  // 6. 处理 anyOf (转 enum)
   if (Array.isArray(schemaNode.anyOf)) {
     schemaNode.anyOf.forEach(item => transformOpenApiSchemaToGemini(item, rootSchema, visited));
 
+    // 尝试提取 enum
     if (schemaNode.anyOf.every(item => item && typeof item === 'object' && item.hasOwnProperty('const'))) {
       const enumValues = schemaNode.anyOf
         .map(item => item.const)
@@ -527,6 +552,7 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
         schemaNode.enum = enumValues;
       }
     } else if (!schemaNode.type) {
+      // 如果不是 enum，尝试取第一个有效的类型定义
       const firstValidItem = schemaNode.anyOf.find(item => item && (item.type || item.enum));
       if (firstValidItem) {
         Object.assign(schemaNode, firstValidItem);
@@ -535,18 +561,30 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
     delete schemaNode.anyOf;
   }
 
+  // 7. 关键优化：将 default 值移动到 description 中
+  if (schemaNode.default !== undefined && schemaNode.description) {
+    schemaNode.description += ` (Default: ${JSON.stringify(schemaNode.default)})`;
+  }
+
+  // 8. 清理不支持的字段
   const unsupportedKeys = [
     'title', '$schema', '$ref', 'strict', 'exclusiveMaximum',
-    'exclusiveMinimum', 'additionalProperties', 'oneOf', 'allOf', 'default',
+    'exclusiveMinimum', 'additionalProperties', 'oneOf', 'default', // default 已处理，可以删除了
     '$defs'
   ];
   unsupportedKeys.forEach(key => delete schemaNode[key]);
 
+  // 9. 递归处理 properties 和 items
   if (schemaNode.properties) {
     Object.values(schemaNode.properties).forEach(prop => transformOpenApiSchemaToGemini(prop, rootSchema, visited));
   }
   if (schemaNode.items) {
     transformOpenApiSchemaToGemini(schemaNode.items, rootSchema, visited);
+  }
+  
+  // 10. 确保 required 数组去重 (由于 allOf 合并可能导致重复)
+  if (schemaNode.required && Array.isArray(schemaNode.required)) {
+      schemaNode.required = [...new Set(schemaNode.required)];
   }
 };
 
