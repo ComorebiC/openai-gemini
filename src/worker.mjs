@@ -352,7 +352,6 @@ async function handleCompletions(req, apiKey) {
   }
   model = model || DEFAULT_MODEL;
 
-  // 融合原有的后缀检查和新的 IMAGE_MODELS 列表
   const isImageGenerationRequest = IMAGE_MODELS.includes(model) || model.includes("-image");
 
   let body = await transformRequest(req, model);
@@ -380,6 +379,8 @@ async function handleCompletions(req, apiKey) {
         body.generationConfig.imageConfig = extra.image_config;
     }
   }
+
+  // 模型后缀处理逻辑
   switch (true) {
     case model.endsWith(":search"):
       model = model.slice(0, -7);
@@ -392,17 +393,12 @@ async function handleCompletions(req, apiKey) {
       body.tools.push({ "url_context": {} });
       break;
     case model.endsWith(":execode"):
+      // 启用代码执行工具
       model = model.slice(0, -8);
       body.tools = body.tools || [];
       body.tools.push({ "code_execution": {} });
       break;
   }
-
-  // // === 【添加调试代码 START】 ===
-  // console.log("-------------- [DEBUG] Request to Gemini --------------");
-  // console.log(JSON.stringify(body, null, 2)); // 打印转换后的 Gemini 格式 JSON
-  // console.log("-------------------------------------------------------");
-  // // === 【添加调试代码 END】 ===
 
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
   let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
@@ -436,13 +432,6 @@ async function handleCompletions(req, apiKey) {
         .pipeThrough(new TextEncoderStream());
     } else {
       body = await response.text();
-
-      // // === 【添加调试代码 START】 ===
-      // console.log("-------------- [DEBUG] Response from Gemini (Raw) --------------");
-      // console.log(body); // 打印 Gemini 返回的原始数据
-      // console.log("----------------------------------------------------------------");
-      // // === 【添加调试代码 END】 ===
-
       try {
         body = JSON.parse(body);
         if (!body.candidates) {
@@ -651,16 +640,19 @@ const transformConfig = (req, model) => {
     const isV3 = model?.includes("gemini-3") || model?.includes("nano banana pro");
     
     if (isV3) {
+      // v3
+      const isPro = model?.includes("pro");
       let thinkingLevel;
       switch (req.reasoning_effort) {
         case "low": thinkingLevel = "LOW"; break;
         case "medium": thinkingLevel = "MEDIUM"; break;
         case "high": thinkingLevel = "HIGH"; break;
-        default: thinkingLevel = "HIGH";
+        default: thinkingLevel = isPro ? "HIGH" : "MEDIUM";
       }
       cfg.thinkingConfig = { thinkingLevel, includeThoughts: true };
     } 
     else {
+      // V2
       let thinkingBudget;
       const isPro = model?.includes("pro");
       const isLite = model?.includes("lite");
@@ -1159,6 +1151,21 @@ const transformCandidates = async (key, cand) => {
       if (part.thoughtSignature) {
           thoughtSignature = part.thoughtSignature;
       }
+    } else if (part.executableCode) {
+      // --- Code Execution: 生成的代码 ---
+      const lang = part.executableCode.language?.toLowerCase() || "python";
+      const code = part.executableCode.code;
+      // 修复：前后添加换行符，确保 Markdown 渲染不会与周围文本粘连
+      contentParts.push("\n```" + lang + "\n" + code + "\n```\n");
+    } else if (part.codeExecutionResult) {
+      // --- Code Execution: 执行结果 ---
+      const outcome = part.codeExecutionResult.outcome;
+      const output = part.codeExecutionResult.output;
+      const label = outcome === "OUTCOME_OK" ? "output" : "error";
+      if (output) {
+          // 修复：前后添加换行符
+          contentParts.push("\n```" + label + "\n" + output + "\n```\n");
+      }
     } else if (part.thought === true && part.text) {
       reasoningParts.push(part.text);
     } else if (part.text) {
@@ -1173,10 +1180,10 @@ const transformCandidates = async (key, cand) => {
       
       if (imageUrl) {
         // 上传成功，使用 URL
-        markdownImage = `![gemini-image-generation](${imageUrl})`;
+        markdownImage = `![gemini-generated-content](${imageUrl})`;
       } else {
         // 上传失败，回退到 Base64
-        markdownImage = `![gemini-image-generation](data:${mimeType};base64,${data})`;
+        markdownImage = `![gemini-generated-content](data:${mimeType};base64,${data})`;
       }
       
       contentParts.push(markdownImage);
@@ -1195,6 +1202,7 @@ const transformCandidates = async (key, cand) => {
     message.reasoning_content = reasoningText;
   }
 
+  // 使用 join("\n\n") 结合 push 时添加的换行符，确保块与块之间有足够的间距
   message.content = contentParts.length > 0 ? contentParts.join("\n\n") : null;
 
   const chunks = cand.groundingMetadata?.groundingChunks;
