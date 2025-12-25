@@ -524,12 +524,32 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
   // 5. 补全或修正 ARRAY 的 items
   if (schemaNode.type === 'ARRAY') {
     if (!schemaNode.items) {
-      // 如果没有 items，默认为 OBJECT
-      schemaNode.items = { type: 'OBJECT' };
+      // 如果没有 items，默认为允许任意类型的数组
+      schemaNode.items = {}; 
     } else if (Array.isArray(schemaNode.items)) {
-      // 【修复关键点】：Gemini 不支持 items 为数组 (Tuple 语法)
-      // 如果 items 是数组，取第一个元素作为该数组所有项的通用定义
-      schemaNode.items = schemaNode.items[0] || { type: 'OBJECT' };
+      // 遇到 Tuple 定义 (items 是数组)
+      
+      // A. 提取 Tuple 的类型信息用于 description
+      const tupleTypes = schemaNode.items.map(it => it.type || 'any').join(', ');
+      const originalDesc = schemaNode.description || "";
+      // 将元组结构写入描述，提示模型
+      schemaNode.description = `${originalDesc} (Tuple: [${tupleTypes}])`.trim();
+
+      // B. 检查是否所有元素类型相同
+      // 例如 [number, number] -> true, [string, number] -> false
+      const firstType = schemaNode.items[0]?.type;
+      const isHomogeneous = schemaNode.items.every(it => it.type === firstType);
+
+      if (isHomogeneous && firstType) {
+        // 情况 1: 同质元组 (如坐标点 [x, y])
+        // 安全地转换为 List<Type>
+        schemaNode.items = schemaNode.items[0];
+      } else {
+        // 情况 2: 异质元组 (如 [name, age])
+        // Gemini 不支持异质数组定义，必须放宽限制为 OBJECT 或任意
+        // 设为 {} 表示允许 item 是任何结构，依靠 description 指导模型
+        schemaNode.items = {}; 
+      }
     }
   }
 
