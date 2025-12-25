@@ -521,9 +521,16 @@ const transformOpenApiSchemaToGemini = (schemaNode, rootSchema, visited = new Se
     }
   }
 
-  // 5. 补全 ARRAY 的 items
-  if (schemaNode.type === 'ARRAY' && !schemaNode.items) {
-    schemaNode.items = { type: 'OBJECT' };
+  // 5. 补全或修正 ARRAY 的 items
+  if (schemaNode.type === 'ARRAY') {
+    if (!schemaNode.items) {
+      // 如果没有 items，默认为 OBJECT
+      schemaNode.items = { type: 'OBJECT' };
+    } else if (Array.isArray(schemaNode.items)) {
+      // 【修复关键点】：Gemini 不支持 items 为数组 (Tuple 语法)
+      // 如果 items 是数组，取第一个元素作为该数组所有项的通用定义
+      schemaNode.items = schemaNode.items[0] || { type: 'OBJECT' };
+    }
   }
 
   // 6. 处理 anyOf (转 enum)
